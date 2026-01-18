@@ -19,8 +19,8 @@ bucket_name = "kkinto-media"
 
 [[kv_namespaces]]
 binding = "APP_KV"
-id = "REPLACE_ME"
-preview_id = "REPLACE_ME"
+id = "1727016319af45f684d3c6345a38fb30"
+preview_id = "1727016319af45f684d3c6345a38fb30"
 
 [vars]
 ADMIN_USERNAME = "admin"
