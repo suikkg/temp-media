@@ -264,7 +264,7 @@ function adminPage() {
     const groupInput = document.getElementById('groupId');
 
     function log(message) {
-      logEl.textContent += message + "\n";
+      logEl.textContent += message + "\\n";
     }
 
     async function refreshStatus() {
