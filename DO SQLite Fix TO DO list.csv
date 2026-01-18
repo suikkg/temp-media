@@ -1,4 +1,0 @@
-id,item,status,done_at,notes
-1,调整 Durable Objects 迁移为 new_sqlite_classes 以兼容免费计划,DONE,2026-01-18T21:56:34+08:00,Updated migrations to use new_sqlite_classes
-2,补充 README 说明（免费计划 DO SQLite 要求）,DONE,2026-01-18T21:56:50+08:00,Documented Free plan SQLite DO requirement
-3,提交并推送修复,IN_PROGRESS,,
