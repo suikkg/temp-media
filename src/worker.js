@@ -203,6 +203,24 @@ function loginPage(message = "") {
 </html>`;
 }
 
+function publicHomePage() {
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Temp Media</title>
+  <style>
+    body { font-family: sans-serif; margin: 32px; }
+    a { color: #0057ff; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <h1>临时文件服务</h1>
+  <p><a href="/login">管理员登录</a></p>
+</body>
+</html>`;
+}
+
 function adminPage() {
   return `<!doctype html>
 <html>
@@ -777,12 +795,12 @@ export default {
     }
 
     if (url.pathname === "/") {
-      return Response.redirect(new URL("/admin", request.url).toString(), 302);
+      return htmlResponse(publicHomePage());
     }
 
     if (url.pathname === "/admin") {
       const session = await requireAdmin(request, env);
-      if (!session) return Response.redirect("/login", 302);
+      if (!session) return Response.redirect(new URL("/login", request.url).toString(), 302);
       return htmlResponse(adminPage());
     }
 
