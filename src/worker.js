@@ -368,78 +368,273 @@ function publicHomePage() {
 </html>`;
 }
 
-function adminPage() {
+function adminStyles() {
+  return `
+    :root {
+      --bg: #f7f8fb;
+      --card: #ffffff;
+      --border: #e6e8ef;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --primary: #2563eb;
+      --primary-dark: #1e4ed8;
+      --danger: #ef4444;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    a { color: var(--primary); text-decoration: none; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 24px;
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      gap: 16px;
+    }
+    .brand { font-weight: 600; }
+    .nav { display: flex; gap: 16px; align-items: center; }
+    .nav a { color: var(--muted); font-weight: 500; padding-bottom: 4px; border-bottom: 2px solid transparent; }
+    .nav a.active { color: var(--text); border-bottom-color: var(--primary); }
+    .container { max-width: 1200px; margin: 24px auto; padding: 0 24px 48px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 16px;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+    }
+    .card-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+    .card-header h1, .card-header h2 { margin: 0; }
+    .muted { color: var(--muted); font-size: 13px; }
+    .status-grid, .stats-grid, .form-grid {
+      display: grid;
+      gap: 16px;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    }
+    .stat { display: flex; flex-direction: column; gap: 4px; }
+    .stat-label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
+    .stat-value { font-size: 20px; font-weight: 600; }
+    .stat-sub { font-size: 12px; color: var(--muted); }
+    .progress { background: #eef0f5; border-radius: 999px; height: 8px; margin-top: 12px; overflow: hidden; }
+    .progress-bar { background: var(--primary); height: 100%; width: 0%; transition: width 0.2s ease; }
+    .actions-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .btn {
+      background: var(--primary);
+      color: #fff;
+      border: 0;
+      border-radius: 8px;
+      padding: 8px 12px;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    .btn:hover { background: var(--primary-dark); }
+    .btn-secondary { background: #f3f4f6; color: #111827; }
+    .btn-secondary:hover { background: #e5e7eb; }
+    .btn-outline { background: #fff; border: 1px solid var(--border); color: #111827; }
+    .btn-danger { background: var(--danger); color: #fff; }
+    .btn-danger:hover { background: #dc2626; }
+    .btn-xs { padding: 6px 10px; font-size: 12px; }
+    input[type="file"], input[type="text"], input[type="search"], input {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    label { font-size: 13px; color: var(--muted); display: block; margin-bottom: 6px; }
+    .log {
+      white-space: pre-wrap;
+      background: #f4f4f5;
+      padding: 12px;
+      border-radius: 8px;
+      min-height: 64px;
+      font-size: 12px;
+    }
+    .links { display: grid; gap: 8px; margin-top: 12px; }
+    .link-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #fafafa;
+    }
+    .link-item a { font-size: 13px; word-break: break-all; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 10px 12px; border-bottom: 1px solid var(--border); text-align: left; font-size: 13px; }
+    th { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+    tbody tr:hover { background: #f9fafb; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 6px;
+      border-radius: 999px;
+      background: #eef2ff;
+      color: #3730a3;
+      font-size: 11px;
+    }
+    .badge.expired { background: #fee2e2; color: #b91c1c; }
+    .file-name { font-weight: 600; }
+    .file-sub { font-size: 12px; color: var(--muted); margin-top: 4px; }
+    .files-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+    @media (max-width: 720px) {
+      .topbar { flex-direction: column; align-items: flex-start; }
+      .card-header { flex-direction: column; align-items: flex-start; }
+    }
+  `;
+}
+
+function adminShell({ title, active, body }) {
+  const navItems = [
+    { href: "/admin", label: "文件", key: "files" },
+    { href: "/admin/stats", label: "统计", key: "stats" },
+  ];
+  const navHtml = navItems
+    .map((item) => `<a href="${item.href}" class="${active === item.key ? "active" : ""}">${item.label}</a>`)
+    .join("");
   return `<!doctype html>
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Temp Media Admin</title>
-  <style>
-    body { font-family: sans-serif; margin: 32px; }
-    input, button { padding: 8px; }
-    .row { margin-top: 12px; }
-    .log { white-space: pre-wrap; background: #f4f4f4; padding: 12px; margin-top: 12px; }
-    .links a { display: block; margin-top: 6px; }
-    .files-table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-    .files-table th, .files-table td { border-bottom: 1px solid #eee; padding: 8px; text-align: left; font-size: 14px; }
-    .files-actions button { margin-right: 6px; margin-top: 4px; }
-    .badge { display: inline-block; padding: 2px 6px; border-radius: 4px; background: #eee; font-size: 12px; }
-  </style>
+  <title>${title}</title>
+  <style>${adminStyles()}</style>
 </head>
 <body>
-  <h1>Temp Media Admin</h1>
-  <form id="logout" method="post" action="/logout">
-    <button type="submit">Logout</button>
-  </form>
-  <div class="row" id="status">Loading status...</div>
+  <header class="topbar">
+    <div class="brand">临时文件服务</div>
+    <nav class="nav">${navHtml}</nav>
+    <form id="logout" method="post" action="/logout">
+      <button type="submit" class="btn btn-secondary btn-xs">退出登录</button>
+    </form>
+  </header>
+  <main class="container">
+    ${body}
+  </main>
+</body>
+</html>`;
+}
 
-  <h2>Upload</h2>
-  <div class="row">
-    <label>Group ID (optional, same value for HLS folders)</label><br />
-    <input id="groupId" placeholder="auto-generate if empty" />
-  </div>
-  <div class="row">
-    <input id="files" type="file" multiple />
-  </div>
-  <div class="row">
-    <button id="upload">Upload</button>
-  </div>
+function adminPage() {
+  const body = `
+  <section class="card">
+    <div class="card-header">
+      <div>
+        <h1>管理员控制台</h1>
+        <div class="muted">单文件 1GB，上限 5GB，默认 1 天后自动删除。</div>
+      </div>
+      <div class="actions-row">
+        <button class="btn btn-secondary btn-xs" id="refreshStatus">刷新状态</button>
+      </div>
+    </div>
+    <div class="status-grid">
+      <div class="stat">
+        <div class="stat-label">已占用</div>
+        <div class="stat-value" id="statusTotal">-</div>
+        <div class="stat-sub" id="statusBreakdown">-</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">空间上限</div>
+        <div class="stat-value" id="statusLimit">-</div>
+        <div class="stat-sub" id="statusPercent">-</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">单文件上限</div>
+        <div class="stat-value" id="statusMaxFile">-</div>
+        <div class="stat-sub" id="statusTtl">-</div>
+      </div>
+    </div>
+    <div class="progress">
+      <div class="progress-bar" id="usageBar"></div>
+    </div>
+    <div class="muted" id="statusNote"></div>
+  </section>
 
-  <div class="log" id="log"></div>
-  <div class="links" id="links"></div>
+  <section class="card" id="uploadSection">
+    <div class="card-header">
+      <div>
+        <h2>上传文件</h2>
+        <div class="muted">同一组 HLS 文件请填写相同的 Group ID。</div>
+      </div>
+    </div>
+    <div class="form-grid">
+      <div>
+        <label for="groupId">Group ID（可选）</label>
+        <input id="groupId" placeholder="留空自动生成" />
+      </div>
+      <div>
+        <label for="files">选择文件</label>
+        <input id="files" type="file" multiple />
+      </div>
+    </div>
+    <div class="actions-row" style="margin-top: 12px;">
+      <button class="btn" id="upload">开始上传</button>
+    </div>
+    <div class="log" id="log" style="margin-top: 12px;"></div>
+    <div class="links" id="links"></div>
+  </section>
 
-  <h2>已上传文件</h2>
-  <div class="row">
-    <button id="refreshFiles">刷新列表</button>
-  </div>
-  <div class="row">
-    <table class="files-table">
-      <thead>
-        <tr>
-          <th>文件名</th>
-          <th>大小</th>
-          <th>到期</th>
-          <th>剩余</th>
-          <th>操作</th>
-        </tr>
-      </thead>
-      <tbody id="filesBody"></tbody>
-    </table>
-  </div>
-  <div class="row">
-    <button id="loadMoreFiles">加载更多</button>
-  </div>
+  <section class="card">
+    <div class="card-header">
+      <div>
+        <h2>文件列表</h2>
+        <div class="muted" id="filesSummary">加载中...</div>
+      </div>
+      <div class="actions-row">
+        <button class="btn btn-secondary btn-xs" id="refreshFiles">刷新列表</button>
+        <button class="btn btn-secondary btn-xs" id="loadMoreFiles">加载更多</button>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table class="files-table">
+        <thead>
+          <tr>
+            <th>文件</th>
+            <th>大小</th>
+            <th>上传时间</th>
+            <th>到期时间</th>
+            <th>剩余</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="filesBody"></tbody>
+      </table>
+    </div>
+  </section>
 
   <script>
-    const statusEl = document.getElementById('status');
+    const statusTotalEl = document.getElementById('statusTotal');
+    const statusBreakdownEl = document.getElementById('statusBreakdown');
+    const statusLimitEl = document.getElementById('statusLimit');
+    const statusPercentEl = document.getElementById('statusPercent');
+    const statusMaxFileEl = document.getElementById('statusMaxFile');
+    const statusTtlEl = document.getElementById('statusTtl');
+    const statusNoteEl = document.getElementById('statusNote');
+    const usageBarEl = document.getElementById('usageBar');
+    const refreshStatusBtn = document.getElementById('refreshStatus');
     const logEl = document.getElementById('log');
     const linksEl = document.getElementById('links');
     const groupInput = document.getElementById('groupId');
     const filesBody = document.getElementById('filesBody');
+    const filesSummaryEl = document.getElementById('filesSummary');
     const refreshFilesBtn = document.getElementById('refreshFiles');
     const loadMoreFilesBtn = document.getElementById('loadMoreFiles');
     let filesCursor = null;
     let filesLoading = false;
+    let loadedCount = 0;
 
     function log(message) {
       logEl.textContent += message + "\\n";
@@ -466,6 +661,23 @@ function adminPage() {
       return minutes + '分钟';
     }
 
+    function formatDuration(seconds) {
+      if (!Number.isFinite(seconds)) return '-';
+      if (seconds >= 86400) {
+        const days = Math.round(seconds / 86400);
+        return days + ' 天';
+      }
+      const hours = Math.round(seconds / 3600);
+      return hours + ' 小时';
+    }
+
+    function formatDate(value) {
+      if (!value) return '-';
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return '-';
+      return date.toLocaleString('zh-CN');
+    }
+
     function copyText(text) {
       if (!text) return;
       if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -478,67 +690,119 @@ function adminPage() {
     function clearFiles() {
       filesBody.textContent = '';
       filesCursor = null;
+      loadedCount = 0;
+    }
+
+    function renderEmptyRow() {
+      const tr = document.createElement('tr');
+      const td = document.createElement('td');
+      td.colSpan = 6;
+      td.textContent = '暂无文件';
+      tr.appendChild(td);
+      filesBody.appendChild(tr);
     }
 
     function renderFileRow(item) {
       const tr = document.createElement('tr');
       const nameTd = document.createElement('td');
-      nameTd.textContent = item.filename;
+      const nameWrap = document.createElement('div');
+      nameWrap.className = 'file-name';
+      if (item.viewUrl) {
+        const link = document.createElement('a');
+        link.href = item.viewUrl;
+        link.target = '_blank';
+        link.textContent = item.filename;
+        nameWrap.appendChild(link);
+      } else {
+        nameWrap.textContent = item.filename;
+      }
+      const sub = document.createElement('div');
+      sub.className = 'file-sub';
+      sub.textContent = item.key;
+      nameTd.appendChild(nameWrap);
+      nameTd.appendChild(sub);
+
       const sizeTd = document.createElement('td');
       sizeTd.textContent = formatBytes(item.size);
+
+      const uploadedTd = document.createElement('td');
+      uploadedTd.textContent = formatDate(item.uploadedAt);
+
       const expTd = document.createElement('td');
       expTd.textContent = item.expiresAt ? new Date(item.expiresAt).toLocaleString('zh-CN') : '-';
+      if (item.expired) {
+        const badge = document.createElement('span');
+        badge.className = 'badge expired';
+        badge.textContent = '已过期';
+        expTd.appendChild(document.createElement('br'));
+        expTd.appendChild(badge);
+      }
+
       const remainingTd = document.createElement('td');
       remainingTd.textContent = formatRemaining(item.remainingSeconds);
+
       const actionsTd = document.createElement('td');
       actionsTd.className = 'files-actions';
 
       const viewBtn = document.createElement('button');
       viewBtn.textContent = '预览';
+      viewBtn.className = 'btn btn-secondary btn-xs';
       viewBtn.dataset.action = 'view';
       viewBtn.dataset.url = item.viewUrl || '';
+      viewBtn.disabled = !item.viewUrl;
 
       const downloadBtn = document.createElement('button');
       downloadBtn.textContent = '下载';
+      downloadBtn.className = 'btn btn-secondary btn-xs';
       downloadBtn.dataset.action = 'download';
       downloadBtn.dataset.url = item.downloadUrl || '';
+      downloadBtn.disabled = !item.downloadUrl;
 
       const copyShareBtn = document.createElement('button');
       copyShareBtn.textContent = item.shortUrl ? '复制短链' : '生成短链';
+      copyShareBtn.className = 'btn btn-outline btn-xs';
       copyShareBtn.dataset.action = item.shortUrl ? 'copyShare' : 'shorten';
       copyShareBtn.dataset.key = encodeURIComponent(item.key);
       copyShareBtn.dataset.url = item.shortUrl || '';
 
       const sharePageBtn = document.createElement('button');
       sharePageBtn.textContent = '分享页';
+      sharePageBtn.className = 'btn btn-outline btn-xs';
       sharePageBtn.dataset.action = 'sharePage';
       sharePageBtn.dataset.url = item.sharePageUrl || '';
+      sharePageBtn.disabled = !item.sharePageUrl;
 
       const copyDirectBtn = document.createElement('button');
       copyDirectBtn.textContent = '复制直链';
+      copyDirectBtn.className = 'btn btn-outline btn-xs';
       copyDirectBtn.dataset.action = 'copyDirect';
       copyDirectBtn.dataset.url = item.directUrl || '';
+      copyDirectBtn.disabled = !item.directUrl;
 
       const extend1 = document.createElement('button');
       extend1.textContent = '+1天';
+      extend1.className = 'btn btn-outline btn-xs';
       extend1.dataset.action = 'extend';
       extend1.dataset.key = encodeURIComponent(item.key);
       extend1.dataset.days = '1';
 
       const extend3 = document.createElement('button');
       extend3.textContent = '+3天';
+      extend3.className = 'btn btn-outline btn-xs';
       extend3.dataset.action = 'extend';
       extend3.dataset.key = encodeURIComponent(item.key);
       extend3.dataset.days = '3';
 
       const extend5 = document.createElement('button');
       extend5.textContent = '+5天';
+      extend5.className = 'btn btn-outline btn-xs';
       extend5.dataset.action = 'extend';
       extend5.dataset.key = encodeURIComponent(item.key);
       extend5.dataset.days = '5';
 
       const deleteBtn = document.createElement('button');
       deleteBtn.textContent = '删除';
+      deleteBtn.className = 'btn btn-danger btn-xs';
       deleteBtn.dataset.action = 'delete';
       deleteBtn.dataset.key = encodeURIComponent(item.key);
 
@@ -554,6 +818,7 @@ function adminPage() {
 
       tr.appendChild(nameTd);
       tr.appendChild(sizeTd);
+      tr.appendChild(uploadedTd);
       tr.appendChild(expTd);
       tr.appendChild(remainingTd);
       tr.appendChild(actionsTd);
@@ -571,9 +836,16 @@ function adminPage() {
         return;
       }
       const data = await res.json();
-      data.items.forEach(renderFileRow);
+      if (!data.items.length && loadedCount === 0) {
+        renderEmptyRow();
+      } else {
+        data.items.forEach(renderFileRow);
+        loadedCount += data.items.length;
+      }
       filesCursor = data.cursor || null;
       loadMoreFilesBtn.disabled = !data.hasMore;
+      loadMoreFilesBtn.style.display = data.hasMore ? 'inline-flex' : 'none';
+      filesSummaryEl.textContent = loadedCount ? ('已加载 ' + loadedCount + ' 个文件') : '暂无文件';
       filesLoading = false;
     }
 
@@ -635,17 +907,43 @@ function adminPage() {
       }
     });
 
+    function addLinkItem(label, url) {
+      if (!url) return;
+      const row = document.createElement('div');
+      row.className = 'link-item';
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.target = '_blank';
+      anchor.textContent = label;
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'btn btn-outline btn-xs';
+      copyBtn.textContent = '复制';
+      copyBtn.addEventListener('click', () => copyText(url));
+      row.appendChild(anchor);
+      row.appendChild(copyBtn);
+      linksEl.appendChild(row);
+    }
+
     async function refreshStatus() {
       const res = await fetch('/api/status');
       if (!res.ok) {
-        statusEl.textContent = 'Failed to load status';
+        statusNoteEl.textContent = '状态加载失败';
         return;
       }
       const data = await res.json();
       const used = data.totalBytes;
       const reserved = data.reservedBytes || 0;
       const total = used + reserved;
-      statusEl.textContent = 'Usage: ' + total + ' (used ' + used + ', reserved ' + reserved + ') / ' + data.maxTotalBytes + ' bytes | Max file: ' + data.maxFileBytes + ' bytes | TTL: ' + data.mediaTtlSeconds + 's';
+      const maxTotal = data.maxTotalBytes || 0;
+      const percent = maxTotal ? Math.min(100, Math.round(total / maxTotal * 100)) : 0;
+      statusTotalEl.textContent = formatBytes(total);
+      statusBreakdownEl.textContent = '已用 ' + formatBytes(used) + ' · 预留 ' + formatBytes(reserved);
+      statusLimitEl.textContent = formatBytes(maxTotal);
+      statusPercentEl.textContent = percent + '%';
+      statusMaxFileEl.textContent = formatBytes(data.maxFileBytes || 0);
+      statusTtlEl.textContent = '保留 ' + formatDuration(data.mediaTtlSeconds);
+      usageBarEl.style.width = percent + '%';
+      statusNoteEl.textContent = '最大文件 ' + formatBytes(data.maxFileBytes || 0) + '，超过将拒绝上传。';
     }
 
     async function startUpload(file, groupId) {
@@ -697,7 +995,7 @@ function adminPage() {
         const chunk = file.slice(offset, offset + partSize);
         await uploadPart(start.uploadToken, partNumber, chunk);
         offset += partSize;
-        log('Uploaded part ' + partNumber + '/' + totalParts + ' for ' + file.name);
+        log('上传分片 ' + partNumber + '/' + totalParts + ' : ' + file.name);
       }
       const complete = await completeUpload(start.uploadToken);
       return { ...complete, groupId: start.groupId };
@@ -709,42 +1007,22 @@ function adminPage() {
       logEl.textContent = '';
       const files = Array.from(document.getElementById('files').files);
       if (!files.length) {
-        log('No files selected.');
+        log('请选择文件。');
         return;
       }
       let groupId = groupInput.value.trim();
       for (const file of files) {
-        log('Starting upload for ' + file.name);
+        log('开始上传：' + file.name);
         const result = await uploadFile(file, groupId || undefined);
         if (!groupId) {
           groupId = result.groupId;
           groupInput.value = groupId;
         }
-        log('Completed ' + file.name);
-        const link = document.createElement('a');
-        link.href = result.viewUrl;
-        link.textContent = file.name + ' -> view';
-        link.target = '_blank';
-        linksEl.appendChild(link);
-        const raw = document.createElement('a');
-        raw.href = result.downloadUrl || result.mediaUrl;
-        raw.textContent = file.name + ' -> direct';
-        raw.target = '_blank';
-        linksEl.appendChild(raw);
-        if (result.shortUrl) {
-          const share = document.createElement('a');
-          share.href = result.shortUrl;
-          share.textContent = file.name + ' -> short';
-          share.target = '_blank';
-          linksEl.appendChild(share);
-        }
-        if (result.sharePageUrl) {
-          const sharePage = document.createElement('a');
-          sharePage.href = result.sharePageUrl;
-          sharePage.textContent = file.name + ' -> share';
-          sharePage.target = '_blank';
-          linksEl.appendChild(sharePage);
-        }
+        log('上传完成：' + file.name);
+        addLinkItem(file.name + ' - 预览链接', result.viewUrl);
+        addLinkItem(file.name + ' - 下载链接', result.downloadUrl || result.mediaUrl);
+        addLinkItem(file.name + ' - 短链接', result.shortUrl);
+        addLinkItem(file.name + ' - 分享页', result.sharePageUrl);
       }
       await refreshStatus();
       await loadFiles(true);
@@ -754,9 +1032,135 @@ function adminPage() {
     loadFiles(true);
     refreshFilesBtn.addEventListener('click', () => loadFiles(true));
     loadMoreFilesBtn.addEventListener('click', () => loadFiles(false));
-  </script>
-</body>
-</html>`;
+    refreshStatusBtn.addEventListener('click', refreshStatus);
+  </script>`;
+
+  return adminShell({ title: "Temp Media Admin", active: "files", body });
+}
+
+function statsPage() {
+  const body = `
+  <section class="card">
+    <div class="card-header">
+      <div>
+        <h1>存储统计</h1>
+        <div class="muted">统计数据来源于 R2 列表与当前使用量记录。</div>
+      </div>
+      <div class="actions-row">
+        <button class="btn btn-secondary btn-xs" id="refreshStats">刷新</button>
+      </div>
+    </div>
+    <div class="stats-grid">
+      <div class="stat">
+        <div class="stat-label">文件总数</div>
+        <div class="stat-value" id="statFileCount">-</div>
+        <div class="stat-sub" id="statLatestUpload">-</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">已占用空间</div>
+        <div class="stat-value" id="statTotalBytes">-</div>
+        <div class="stat-sub" id="statTotalBreakdown">-</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">空间上限</div>
+        <div class="stat-value" id="statMaxBytes">-</div>
+        <div class="stat-sub" id="statUsagePercent">-</div>
+      </div>
+    </div>
+    <div class="progress">
+      <div class="progress-bar" id="statsUsageBar"></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-header">
+      <div>
+        <h2>到期统计</h2>
+        <div class="muted">统计包含未来 1/3/7 天内的到期文件。</div>
+      </div>
+    </div>
+    <div class="stats-grid">
+      <div class="stat">
+        <div class="stat-label">已过期</div>
+        <div class="stat-value" id="statExpired">-</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">1 天内</div>
+        <div class="stat-value" id="statExpiring1d">-</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">3 天内</div>
+        <div class="stat-value" id="statExpiring3d">-</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">7 天内</div>
+        <div class="stat-value" id="statExpiring7d">-</div>
+      </div>
+    </div>
+    <div class="muted" id="statNextExpiry" style="margin-top: 12px;"></div>
+  </section>
+
+  <script>
+    const refreshStatsBtn = document.getElementById('refreshStats');
+    const statFileCountEl = document.getElementById('statFileCount');
+    const statLatestUploadEl = document.getElementById('statLatestUpload');
+    const statTotalBytesEl = document.getElementById('statTotalBytes');
+    const statTotalBreakdownEl = document.getElementById('statTotalBreakdown');
+    const statMaxBytesEl = document.getElementById('statMaxBytes');
+    const statUsagePercentEl = document.getElementById('statUsagePercent');
+    const statsUsageBarEl = document.getElementById('statsUsageBar');
+    const statExpiredEl = document.getElementById('statExpired');
+    const statExpiring1dEl = document.getElementById('statExpiring1d');
+    const statExpiring3dEl = document.getElementById('statExpiring3d');
+    const statExpiring7dEl = document.getElementById('statExpiring7d');
+    const statNextExpiryEl = document.getElementById('statNextExpiry');
+
+    function formatBytes(bytes) {
+      if (!Number.isFinite(bytes)) return '-';
+      if (bytes === 0) return '0 B';
+      const k = 1024;
+      const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      const value = Math.round(bytes / Math.pow(k, i) * 100) / 100;
+      return value + ' ' + sizes[i];
+    }
+
+    function formatDate(value) {
+      if (!value) return '-';
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return '-';
+      return date.toLocaleString('zh-CN');
+    }
+
+    async function loadStats() {
+      const res = await fetch('/api/stats');
+      if (!res.ok) {
+        statNextExpiryEl.textContent = '统计加载失败';
+        return;
+      }
+      const data = await res.json();
+      const total = (data.usedBytes || 0) + (data.reservedBytes || 0);
+      const maxTotal = data.maxTotalBytes || 0;
+      const percent = maxTotal ? Math.min(100, Math.round(total / maxTotal * 100)) : 0;
+      statFileCountEl.textContent = data.fileCount || 0;
+      statLatestUploadEl.textContent = '最近上传：' + formatDate(data.latestUploadAt);
+      statTotalBytesEl.textContent = formatBytes(total);
+      statTotalBreakdownEl.textContent = '已用 ' + formatBytes(data.usedBytes) + ' · 预留 ' + formatBytes(data.reservedBytes || 0);
+      statMaxBytesEl.textContent = formatBytes(maxTotal);
+      statUsagePercentEl.textContent = percent + '%';
+      statsUsageBarEl.style.width = percent + '%';
+      statExpiredEl.textContent = data.expiredCount || 0;
+      statExpiring1dEl.textContent = data.expiring1d || 0;
+      statExpiring3dEl.textContent = data.expiring3d || 0;
+      statExpiring7dEl.textContent = data.expiring7d || 0;
+      statNextExpiryEl.textContent = data.nextExpiryAt ? ('最近到期：' + formatDate(data.nextExpiryAt)) : '暂无即将到期的文件';
+    }
+
+    loadStats();
+    refreshStatsBtn.addEventListener('click', loadStats);
+  </script>`;
+
+  return adminShell({ title: "Temp Media Stats", active: "stats", body });
 }
 
 function viewPage({ mediaUrl, name, contentType, isPlaylist }) {
@@ -974,6 +1378,73 @@ async function handleStatus(env) {
     maxFileBytes,
     maxTotalBytes,
     mediaTtlSeconds,
+  });
+}
+
+async function handleStats(env) {
+  const usageRes = await usageGet(env, "/status");
+  if (!usageRes.ok) {
+    return textResponse("Usage unavailable", { status: 503 });
+  }
+  const usage = await usageRes.json();
+  const maxFileBytes = getEnvNumber(env, "MAX_FILE_BYTES", 1073741824);
+  const maxTotalBytes = getEnvNumber(env, "MAX_TOTAL_BYTES", 5368709120);
+  const mediaTtlSeconds = getEnvNumber(env, "MEDIA_TTL_SECONDS", 86400);
+  const now = Date.now();
+  const dayMs = 86400 * 1000;
+  let fileCount = 0;
+  let totalBytes = 0;
+  let expiredCount = 0;
+  let expiring1d = 0;
+  let expiring3d = 0;
+  let expiring7d = 0;
+  let nextExpiryAt = null;
+  let latestUploadAt = null;
+
+  let cursor;
+  do {
+    const listing = await env.MEDIA_BUCKET.list({ cursor, limit: 1000 });
+    for (const obj of listing.objects) {
+      fileCount += 1;
+      totalBytes += obj.size || 0;
+      const head = await env.MEDIA_BUCKET.head(obj.key);
+      if (!head) continue;
+      const meta = await readMeta(env, obj.key);
+      const expiresAt = meta?.expiresAt || head.customMetadata?.expiresAt || null;
+      const expiresAtMs = expiresAt ? Date.parse(expiresAt) : NaN;
+      if (Number.isFinite(expiresAtMs)) {
+        if (expiresAtMs <= now) {
+          expiredCount += 1;
+        } else {
+          if (expiresAtMs <= now + dayMs) expiring1d += 1;
+          if (expiresAtMs <= now + dayMs * 3) expiring3d += 1;
+          if (expiresAtMs <= now + dayMs * 7) expiring7d += 1;
+          if (!nextExpiryAt || expiresAtMs < nextExpiryAt) nextExpiryAt = expiresAtMs;
+        }
+      }
+      const uploadedAt = meta?.uploadedAt || head.customMetadata?.uploadedAt || null;
+      const uploadedAtMs = uploadedAt ? Date.parse(uploadedAt) : NaN;
+      if (Number.isFinite(uploadedAtMs)) {
+        if (!latestUploadAt || uploadedAtMs > latestUploadAt) latestUploadAt = uploadedAtMs;
+      }
+    }
+    cursor = listing.truncated ? listing.cursor : undefined;
+  } while (cursor);
+
+  return jsonResponse({
+    usedBytes: usage.usedBytes,
+    reservedBytes: usage.reservedBytes,
+    totalBytes,
+    maxFileBytes,
+    maxTotalBytes,
+    mediaTtlSeconds,
+    fileCount,
+    expiredCount,
+    expiring1d,
+    expiring3d,
+    expiring7d,
+    nextExpiryAt: nextExpiryAt ? new Date(nextExpiryAt).toISOString() : null,
+    latestUploadAt: latestUploadAt ? new Date(latestUploadAt).toISOString() : null,
   });
 }
 
@@ -1470,10 +1941,22 @@ export default {
       return htmlResponse(adminPage());
     }
 
+    if (url.pathname === "/admin/stats") {
+      const session = await requireAdmin(request, env);
+      if (!session) return Response.redirect(new URL("/login", request.url).toString(), 302);
+      return htmlResponse(statsPage());
+    }
+
     if (url.pathname === "/api/status") {
       const session = await requireAdmin(request, env);
       if (!session) return textResponse("Unauthorized", { status: 401 });
       return handleStatus(env);
+    }
+
+    if (url.pathname === "/api/stats") {
+      const session = await requireAdmin(request, env);
+      if (!session) return textResponse("Unauthorized", { status: 401 });
+      return handleStats(env);
     }
 
     if (url.pathname === "/api/uploads/start") {
