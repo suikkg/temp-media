@@ -504,10 +504,15 @@ function adminPage() {
       downloadBtn.dataset.url = item.downloadUrl || '';
 
       const copyShareBtn = document.createElement('button');
-      copyShareBtn.textContent = item.shareUrl ? '复制短链' : '生成短链';
-      copyShareBtn.dataset.action = item.shareUrl ? 'copyShare' : 'shorten';
+      copyShareBtn.textContent = item.shortUrl ? '复制短链' : '生成短链';
+      copyShareBtn.dataset.action = item.shortUrl ? 'copyShare' : 'shorten';
       copyShareBtn.dataset.key = encodeURIComponent(item.key);
-      copyShareBtn.dataset.url = item.shareUrl || '';
+      copyShareBtn.dataset.url = item.shortUrl || '';
+
+      const sharePageBtn = document.createElement('button');
+      sharePageBtn.textContent = '分享页';
+      sharePageBtn.dataset.action = 'sharePage';
+      sharePageBtn.dataset.url = item.sharePageUrl || '';
 
       const copyDirectBtn = document.createElement('button');
       copyDirectBtn.textContent = '复制直链';
@@ -541,6 +546,7 @@ function adminPage() {
       actionsTd.appendChild(downloadBtn);
       actionsTd.appendChild(copyShareBtn);
       actionsTd.appendChild(copyDirectBtn);
+      actionsTd.appendChild(sharePageBtn);
       actionsTd.appendChild(extend1);
       actionsTd.appendChild(extend3);
       actionsTd.appendChild(extend5);
@@ -582,6 +588,11 @@ function adminPage() {
       }
       if (action === 'copyShare' || action === 'copyDirect') {
         copyText(btn.dataset.url || '');
+        return;
+      }
+      if (action === 'sharePage') {
+        const url = btn.dataset.url;
+        if (url) window.open(url, '_blank');
         return;
       }
       if (action === 'shorten') {
@@ -720,12 +731,19 @@ function adminPage() {
         raw.textContent = file.name + ' -> direct';
         raw.target = '_blank';
         linksEl.appendChild(raw);
-        if (result.shareUrl) {
+        if (result.shortUrl) {
           const share = document.createElement('a');
-          share.href = result.shareUrl;
-          share.textContent = file.name + ' -> share';
+          share.href = result.shortUrl;
+          share.textContent = file.name + ' -> short';
           share.target = '_blank';
           linksEl.appendChild(share);
+        }
+        if (result.sharePageUrl) {
+          const sharePage = document.createElement('a');
+          sharePage.href = result.sharePageUrl;
+          sharePage.textContent = file.name + ' -> share';
+          sharePage.target = '_blank';
+          linksEl.appendChild(sharePage);
         }
       }
       await refreshStatus();
@@ -1113,6 +1131,7 @@ async function handleUploadComplete(request, env) {
     await saveMeta(env, record.key, meta);
   }
   const shareUrl = shortCode ? `${baseUrl}/s/${shortCode}` : null;
+  const sharePageUrl = shortCode ? `${baseUrl}/share/${shortCode}` : null;
 
   return jsonResponse({
     key: record.key,
@@ -1120,7 +1139,8 @@ async function handleUploadComplete(request, env) {
     mediaUrl,
     viewUrl,
     downloadUrl,
-    shareUrl,
+    shortUrl: shareUrl,
+    sharePageUrl,
     shortCode,
     expiresAt: record.expiresAt,
   });
@@ -1218,8 +1238,8 @@ async function handleView(request, env, url) {
   return htmlResponse(viewPage({ mediaUrl, name, contentType, isPlaylist }));
 }
 
-async function handleShare(request, env, url) {
-  const code = decodeURIComponent(url.pathname.replace("/s/", ""));
+async function handleSharePage(request, env, url) {
+  const code = decodeURIComponent(url.pathname.replace("/share/", ""));
   if (!code) return textResponse("Not found", { status: 404 });
   const key = await resolveShortCode(env, code);
   if (!key) return textResponse("Not found", { status: 404 });
@@ -1255,6 +1275,28 @@ async function handleShare(request, env, url) {
       downloadUrl: urls.downloadUrl,
     })
   );
+}
+
+async function handleShortPreview(request, env, url) {
+  const code = decodeURIComponent(url.pathname.replace("/s/", ""));
+  if (!code) return textResponse("Not found", { status: 404 });
+  const key = await resolveShortCode(env, code);
+  if (!key) return textResponse("Not found", { status: 404 });
+  const head = await env.MEDIA_BUCKET.head(key);
+  if (!head) return textResponse("Not found", { status: 404 });
+  const meta = await getMetaForKey(env, key, head);
+  const expiresAt = extractExpiresAt(meta, head);
+  if (expiresAt && Date.parse(expiresAt) <= Date.now()) {
+    await deleteObjectAndMeta(env, key, head, meta);
+    return textResponse("Expired", { status: 410 });
+  }
+  const expiresAtMs = expiresAt ? Date.parse(expiresAt) : null;
+  const expiresAtSeconds = Number.isFinite(expiresAtMs)
+    ? Math.floor(expiresAtMs / 1000)
+    : Math.floor(Date.now() / 1000) + getEnvNumber(env, "MEDIA_TTL_SECONDS", 86400);
+  const token = await createToken(env.TOKEN_SIGNING_SECRET, key, expiresAtSeconds);
+  const urls = buildTokenUrls(request, key, token);
+  return Response.redirect(urls.viewUrl, 302);
 }
 
 async function handleFilesList(request, env, url) {
@@ -1296,7 +1338,8 @@ async function handleFilesList(request, env, url) {
       directUrl,
       downloadUrl,
       shortCode,
-      shareUrl: shortCode ? `${baseUrl}/s/${shortCode}` : null,
+      shortUrl: shortCode ? `${baseUrl}/s/${shortCode}` : null,
+      sharePageUrl: shortCode ? `${baseUrl}/share/${shortCode}` : null,
       expired,
     });
   }
@@ -1475,8 +1518,12 @@ export default {
       return handleFilesShorten(request, env);
     }
 
+    if (url.pathname.startsWith("/share/")) {
+      return handleSharePage(request, env, url);
+    }
+
     if (url.pathname.startsWith("/s/")) {
-      return handleShare(request, env, url);
+      return handleShortPreview(request, env, url);
     }
 
     if (url.pathname.startsWith("/media/")) {
