@@ -11,8 +11,8 @@ bindings = [
 ]
 
 [[migrations]]
-tag = "v1"
-new_classes = ["Usage"]
+tag = "v2"
+new_sqlite_classes = ["Usage"]
 
 [[r2_buckets]]
 binding = "MEDIA_BUCKET"

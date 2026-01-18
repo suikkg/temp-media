@@ -9,6 +9,8 @@ Temporary public media (image/video/HLS) with 1-day expiry. Admin-only upload, p
 - Cloudflare KV namespace
 - Cloudflare Durable Objects (usage tracking)
 
+Note: Cloudflare Free plan requires Durable Objects created via `new_sqlite_classes` migrations.
+
 ## Quick setup
 
 1) Create an R2 bucket (example name: `kkinto-media`).
