@@ -324,14 +324,18 @@ function loginPage(message = "") {
 <html>
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Admin Login</title>
   <style>
-    body { font-family: sans-serif; margin: 40px; }
-    .box { max-width: 360px; margin: 0 auto; }
+    body { font-family: sans-serif; margin: 32px; background: #f7f8fb; }
+    .box { max-width: 360px; margin: 0 auto; background: #fff; padding: 16px; border-radius: 12px; border: 1px solid #e6e8ef; }
     label { display: block; margin-top: 12px; }
     input { width: 100%; padding: 8px; }
-    button { margin-top: 16px; padding: 8px 12px; }
+    button { margin-top: 16px; padding: 8px 12px; width: 100%; }
     .error { color: #b00020; margin-top: 12px; }
+    @media (max-width: 600px) {
+      body { margin: 16px; }
+    }
   </style>
 </head>
 <body>
@@ -355,10 +359,14 @@ function publicHomePage() {
 <html>
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Temp Media</title>
   <style>
     body { font-family: sans-serif; margin: 32px; }
     a { color: #0057ff; text-decoration: none; }
+    @media (max-width: 600px) {
+      body { margin: 16px; }
+    }
   </style>
 </head>
 <body>
@@ -494,6 +502,25 @@ function adminStyles() {
     @media (max-width: 720px) {
       .topbar { flex-direction: column; align-items: flex-start; }
       .card-header { flex-direction: column; align-items: flex-start; }
+      .nav { flex-wrap: wrap; }
+      .container { padding: 0 12px 32px; }
+      .topbar { padding: 12px; }
+      .card { padding: 12px; }
+      table, thead, tbody, th, td, tr { display: block; width: 100%; }
+      thead { display: none; }
+      tr { border: 1px solid var(--border); border-radius: 10px; padding: 8px; margin-bottom: 10px; background: #fff; }
+      td { border: none; padding: 6px 0; }
+      td::before {
+        content: attr(data-label);
+        display: block;
+        font-size: 11px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin-bottom: 2px;
+      }
+      .files-actions { gap: 4px; }
+      .actions-row { gap: 6px; }
     }
   `;
 }
@@ -510,6 +537,7 @@ function adminShell({ title, active, body }) {
 <html>
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>${title}</title>
   <style>${adminStyles()}</style>
 </head>
@@ -697,6 +725,7 @@ function adminPage() {
       const tr = document.createElement('tr');
       const td = document.createElement('td');
       td.colSpan = 6;
+      td.dataset.label = '提示';
       td.textContent = '暂无文件';
       tr.appendChild(td);
       filesBody.appendChild(tr);
@@ -705,6 +734,7 @@ function adminPage() {
     function renderFileRow(item) {
       const tr = document.createElement('tr');
       const nameTd = document.createElement('td');
+      nameTd.dataset.label = '文件';
       const nameWrap = document.createElement('div');
       nameWrap.className = 'file-name';
       if (item.viewUrl) {
@@ -723,12 +753,15 @@ function adminPage() {
       nameTd.appendChild(sub);
 
       const sizeTd = document.createElement('td');
+      sizeTd.dataset.label = '大小';
       sizeTd.textContent = formatBytes(item.size);
 
       const uploadedTd = document.createElement('td');
+      uploadedTd.dataset.label = '上传时间';
       uploadedTd.textContent = formatDate(item.uploadedAt);
 
       const expTd = document.createElement('td');
+      expTd.dataset.label = '到期时间';
       expTd.textContent = item.expiresAt ? new Date(item.expiresAt).toLocaleString('zh-CN') : '-';
       if (item.expired) {
         const badge = document.createElement('span');
@@ -739,10 +772,12 @@ function adminPage() {
       }
 
       const remainingTd = document.createElement('td');
+      remainingTd.dataset.label = '剩余';
       remainingTd.textContent = formatRemaining(item.remainingSeconds);
 
       const actionsTd = document.createElement('td');
       actionsTd.className = 'files-actions';
+      actionsTd.dataset.label = '操作';
 
       const viewBtn = document.createElement('button');
       viewBtn.textContent = '预览';
@@ -1192,11 +1227,16 @@ function viewPage({ mediaUrl, name, contentType, isPlaylist }) {
 <html>
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>${name}</title>
   <style>
-    body { font-family: sans-serif; margin: 32px; }
+    body { font-family: sans-serif; margin: 24px; }
     video, img { max-width: 100%; height: auto; }
     #notice { margin-top: 12px; color: #b00020; }
+    @media (max-width: 600px) {
+      body { margin: 16px; }
+      h1 { font-size: 20px; }
+    }
   </style>
 </head>
 <body>
@@ -1218,9 +1258,10 @@ function sharePage({ name, size, uploadedAt, expiresAt, remaining, shareUrl, vie
 <html>
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>${safeName}</title>
   <style>
-    body { font-family: sans-serif; margin: 32px; }
+    body { font-family: sans-serif; margin: 24px; }
     .meta { color: #555; margin-top: 6px; }
     .actions { margin: 16px 0; display: flex; gap: 12px; flex-wrap: wrap; }
     .btn { background: #0057ff; color: #fff; padding: 8px 14px; border-radius: 6px; text-decoration: none; }
@@ -1228,6 +1269,13 @@ function sharePage({ name, size, uploadedAt, expiresAt, remaining, shareUrl, vie
     input { width: 100%; padding: 8px; }
     button { margin-left: 8px; padding: 8px 12px; }
     .row { display: flex; align-items: center; gap: 8px; }
+    @media (max-width: 600px) {
+      body { margin: 16px; }
+      .actions { flex-direction: column; }
+      .btn { width: 100%; text-align: center; }
+      .row { flex-direction: column; align-items: stretch; }
+      button { margin-left: 0; width: 100%; }
+    }
   </style>
 </head>
 <body>
