@@ -777,7 +777,7 @@ export default {
     }
 
     if (url.pathname === "/") {
-      return Response.redirect("/admin", 302);
+      return Response.redirect(new URL("/admin", request.url).toString(), 302);
     }
 
     if (url.pathname === "/admin") {
