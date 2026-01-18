@@ -1,0 +1,13 @@
+{
+  "name": "kkinto-temp-media",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "lint": "node --check src/worker.js"
+  },
+  "devDependencies": {
+    "wrangler": "^3.0.0"
+  }
+}
