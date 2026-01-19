@@ -80,30 +80,8 @@ async function deleteMeta(env, key) {
   await env.APP_KV.delete(metaKey(key));
 }
 
-function buildMetaFromHead(key, head) {
-  const custom = head.customMetadata || {};
-  return {
-    key,
-    originalName: custom.originalName || key.split("/").pop(),
-    size: head.size,
-    uploadedAt: custom.uploadedAt || (head.uploaded ? head.uploaded.toISOString() : null),
-    expiresAt: custom.expiresAt || null,
-    groupId: custom.groupId || null,
-    shortCode: custom.shortCode || null,
-  };
-}
-
-async function getMetaForKey(env, key, head) {
-  const meta = await readMeta(env, key);
-  if (meta) return meta;
-  if (head) return buildMetaFromHead(key, head);
-  const fresh = await env.MEDIA_BUCKET.head(key);
-  if (!fresh) return null;
-  return buildMetaFromHead(key, fresh);
-}
-
-function extractExpiresAt(meta, head) {
-  return meta?.expiresAt || head?.customMetadata?.expiresAt || null;
+function extractExpiresAt(meta) {
+  return meta?.expiresAt || null;
 }
 
 async function ensureShortCode(env, key, meta) {
@@ -159,10 +137,21 @@ function buildTokenUrls(request, key, token) {
   return { mediaUrl, viewUrl, downloadUrl };
 }
 
-async function deleteObjectAndMeta(env, key, head, meta) {
-  await env.MEDIA_BUCKET.delete(key);
-  if (head?.size) {
-    await usageRequest(env, "/adjust", { delta: -head.size });
+async function deleteObjectAndMeta(env, key, meta) {
+  const vpsError = ensureVpsConfig(env);
+  if (vpsError) {
+    await deleteShortCode(env, meta);
+    await deleteMeta(env, key);
+    return;
+  }
+  const head = meta?.size ? null : await vpsHead(env, key);
+  const size = meta?.size || head?.size || 0;
+  const res = await vpsDelete(env, key);
+  if (!res.ok && res.status !== 404) {
+    throw new Error(`VPS delete failed: ${res.status}`);
+  }
+  if (size) {
+    await usageRequest(env, "/adjust", { delta: -size });
   }
   await deleteShortCode(env, meta);
   await deleteMeta(env, key);
@@ -194,6 +183,40 @@ function corsHeaders() {
   headers.set("Access-Control-Allow-Methods", "GET,HEAD,OPTIONS");
   headers.set("Access-Control-Allow-Headers", "Range,Content-Type");
   return headers;
+}
+
+function ensureVpsConfig(env) {
+  if (!env.VPS_BASE_URL) return "Missing VPS_BASE_URL";
+  if (!env.VPS_AUTH_TOKEN) return "Missing VPS_AUTH_TOKEN";
+  return null;
+}
+
+function buildVpsUrl(env, path) {
+  const base = new URL(env.VPS_BASE_URL);
+  const normalized = path.startsWith("/") ? path.slice(1) : path;
+  const basePath = base.pathname.endsWith("/") ? base.pathname.slice(0, -1) : base.pathname;
+  base.pathname = [basePath, normalized].filter(Boolean).join("/");
+  return base.toString();
+}
+
+async function vpsFetch(env, path, init = {}) {
+  const headers = new Headers(init.headers || {});
+  if (env.VPS_AUTH_TOKEN) {
+    headers.set("Authorization", `Bearer ${env.VPS_AUTH_TOKEN}`);
+  }
+  return fetch(buildVpsUrl(env, path), { ...init, headers });
+}
+
+async function vpsHead(env, key) {
+  const res = await vpsFetch(env, `/files/${encodeURIComponent(key)}`, { method: "HEAD" });
+  if (!res.ok) return null;
+  const size = Number(res.headers.get("Content-Length") || 0);
+  const contentType = res.headers.get("Content-Type") || "application/octet-stream";
+  return { size, contentType };
+}
+
+async function vpsDelete(env, key) {
+  return vpsFetch(env, `/files/${encodeURIComponent(key)}`, { method: "DELETE" });
 }
 
 function getEnvNumber(env, key, fallback) {
@@ -1079,7 +1102,7 @@ function statsPage() {
     <div class="card-header">
       <div>
         <h1>存储统计</h1>
-        <div class="muted">统计数据来源于 R2 列表与当前使用量记录。</div>
+        <div class="muted">统计数据来源于 KV 元数据与当前使用量记录。</div>
       </div>
       <div class="actions-row">
         <button class="btn btn-secondary btn-xs" id="refreshStats">刷新</button>
@@ -1451,14 +1474,15 @@ async function handleStats(env) {
 
   let cursor;
   do {
-    const listing = await env.MEDIA_BUCKET.list({ cursor, limit: 1000 });
-    for (const obj of listing.objects) {
+    const listing = await env.APP_KV.list({ prefix: "meta:", cursor, limit: 1000 });
+    for (const entry of listing.keys) {
+      const raw = await env.APP_KV.get(entry.name);
+      if (!raw) continue;
+      const meta = parseJson(raw);
+      if (!meta) continue;
       fileCount += 1;
-      totalBytes += obj.size || 0;
-      const head = await env.MEDIA_BUCKET.head(obj.key);
-      if (!head) continue;
-      const meta = await readMeta(env, obj.key);
-      const expiresAt = meta?.expiresAt || head.customMetadata?.expiresAt || null;
+      totalBytes += Number(meta.size || 0);
+      const expiresAt = meta.expiresAt || null;
       const expiresAtMs = expiresAt ? Date.parse(expiresAt) : NaN;
       if (Number.isFinite(expiresAtMs)) {
         if (expiresAtMs <= now) {
@@ -1470,13 +1494,13 @@ async function handleStats(env) {
           if (!nextExpiryAt || expiresAtMs < nextExpiryAt) nextExpiryAt = expiresAtMs;
         }
       }
-      const uploadedAt = meta?.uploadedAt || head.customMetadata?.uploadedAt || null;
+      const uploadedAt = meta.uploadedAt || null;
       const uploadedAtMs = uploadedAt ? Date.parse(uploadedAt) : NaN;
       if (Number.isFinite(uploadedAtMs)) {
         if (!latestUploadAt || uploadedAtMs > latestUploadAt) latestUploadAt = uploadedAtMs;
       }
     }
-    cursor = listing.truncated ? listing.cursor : undefined;
+    cursor = listing.list_complete ? undefined : listing.cursor;
   } while (cursor);
 
   return jsonResponse({
@@ -1497,6 +1521,8 @@ async function handleStats(env) {
 }
 
 async function handleUploadStart(request, env) {
+  const vpsError = ensureVpsConfig(env);
+  if (vpsError) return textResponse(vpsError, { status: 500 });
   const body = await request.json();
   const filename = sanitizeFilename(String(body.filename || "file"));
   const size = Number(body.size || 0);
@@ -1531,26 +1557,35 @@ async function handleUploadStart(request, env) {
   const expiresAt = new Date(Date.now() + mediaTtlSeconds * 1000).toISOString();
   const uploadedAt = new Date().toISOString();
 
-  let upload;
+  let uploadId;
   try {
-    upload = await env.MEDIA_BUCKET.createMultipartUpload(key, {
-      httpMetadata: { contentType },
-      customMetadata: {
-        expiresAt,
-        uploadedAt,
-        groupId,
+    const res = await vpsFetch(env, "/uploads/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        key,
+        size,
+        contentType,
+        partSize: PART_SIZE_BYTES,
         originalName: filename,
-        size: String(size),
-      },
+      }),
     });
+    if (!res.ok) {
+      throw new Error(await res.text());
+    }
+    const data = await res.json();
+    uploadId = data.uploadId;
+    if (!uploadId) {
+      throw new Error("Missing uploadId");
+    }
   } catch (error) {
     await usageRequest(env, "/release", { token: uploadToken });
-    throw error;
+    return textResponse("Storage unavailable", { status: 502 });
   }
 
   const record = {
     key,
-    uploadId: upload.uploadId,
+    uploadId,
     size,
     uploadedBytes: 0,
     partSize: PART_SIZE_BYTES,
@@ -1558,6 +1593,7 @@ async function handleUploadStart(request, env) {
     expiresAt,
     uploadedAt,
     originalName: filename,
+    contentType,
   };
   await env.APP_KV.put(`upload:${uploadToken}`, JSON.stringify(record), { expirationTtl: 86400 });
 
@@ -1571,6 +1607,8 @@ async function handleUploadStart(request, env) {
 }
 
 async function handleUploadPart(request, env, url) {
+  const vpsError = ensureVpsConfig(env);
+  if (vpsError) return textResponse(vpsError, { status: 500 });
   const uploadToken = url.searchParams.get("uploadToken");
   const partNumber = Number(url.searchParams.get("partNumber"));
   if (!uploadToken || !Number.isFinite(partNumber) || partNumber <= 0) {
@@ -1586,25 +1624,35 @@ async function handleUploadPart(request, env, url) {
     return textResponse("Empty body", { status: 400 });
   }
 
-  const upload = await env.MEDIA_BUCKET.resumeMultipartUpload(record.key, record.uploadId);
-  const part = await upload.uploadPart(partNumber, body);
+  const partRes = await vpsFetch(
+    env,
+    `/uploads/part?uploadId=${encodeURIComponent(record.uploadId)}&partNumber=${partNumber}`,
+    {
+      method: "POST",
+      body,
+    }
+  );
+  if (!partRes.ok) {
+    return textResponse("Upload failed", { status: 502 });
+  }
 
   record.uploadedBytes += body.byteLength;
   if (record.uploadedBytes > record.size) {
-    await upload.abort();
     await env.APP_KV.delete(`upload:${uploadToken}`);
     await usageRequest(env, "/release", { token: uploadToken });
     return textResponse("Upload exceeds declared size", { status: 400 });
   }
 
   record.parts = record.parts || [];
-  record.parts.push({ partNumber, etag: part.etag });
+  record.parts.push({ partNumber, size: body.byteLength });
   await env.APP_KV.put(`upload:${uploadToken}`, JSON.stringify(record), { expirationTtl: 86400 });
 
-  return jsonResponse({ etag: part.etag });
+  return jsonResponse({ ok: true });
 }
 
 async function handleUploadComplete(request, env) {
+  const vpsError = ensureVpsConfig(env);
+  if (vpsError) return textResponse(vpsError, { status: 500 });
   const body = await request.json();
   const uploadToken = body.uploadToken;
   if (!uploadToken) return textResponse("Missing uploadToken", { status: 400 });
@@ -1615,10 +1663,14 @@ async function handleUploadComplete(request, env) {
   if (!record.parts || !record.parts.length) {
     return textResponse("No parts uploaded", { status: 400 });
   }
-  const parts = record.parts.sort((a, b) => a.partNumber - b.partNumber);
-
-  const upload = await env.MEDIA_BUCKET.resumeMultipartUpload(record.key, record.uploadId);
-  await upload.complete(parts);
+  const completeRes = await vpsFetch(env, "/uploads/complete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ uploadId: record.uploadId }),
+  });
+  if (!completeRes.ok) {
+    return textResponse("Upload complete failed", { status: 502 });
+  }
   await env.APP_KV.delete(`upload:${uploadToken}`);
   await usageRequest(env, "/commit", { token: uploadToken });
 
@@ -1642,6 +1694,7 @@ async function handleUploadComplete(request, env) {
     expiresAt: record.expiresAt,
     groupId: record.groupId,
     shortCode: null,
+    contentType: record.contentType,
   };
   const shortCode = await ensureShortCode(env, record.key, meta);
   if (shortCode) {
@@ -1666,6 +1719,8 @@ async function handleUploadComplete(request, env) {
 }
 
 async function handleMedia(request, env, url) {
+  const vpsError = ensureVpsConfig(env);
+  if (vpsError) return textResponse(vpsError, { status: 500 });
   const key = decodeURIComponent(url.pathname.replace("/media/", ""));
   const token = url.searchParams.get("token");
   if (!key || !token) return textResponse("Missing token", { status: 401 });
@@ -1673,24 +1728,27 @@ async function handleMedia(request, env, url) {
   if (!verified) return textResponse("Invalid token", { status: 403 });
 
   const rangeHeader = request.headers.get("Range");
-  const head = await env.MEDIA_BUCKET.head(key);
-  if (!head) return textResponse("Not found", { status: 404 });
-
-  const meta = await getMetaForKey(env, key, head);
-  const expiresAt = extractExpiresAt(meta, head);
+  const meta = await readMeta(env, key);
+  if (!meta) return textResponse("Not found", { status: 404 });
+  const expiresAt = extractExpiresAt(meta);
   if (expiresAt && Date.parse(expiresAt) <= Date.now()) {
-    await deleteObjectAndMeta(env, key, head, meta);
+    await deleteObjectAndMeta(env, key, meta);
     return textResponse("Expired", { status: 410 });
   }
 
-  const contentType = head.httpMetadata?.contentType || "";
+  const contentType = meta.contentType || guessContentType(meta.originalName || key);
   const isPlaylist = key.toLowerCase().endsWith(".m3u8") || contentType.includes("mpegurl");
   if (isPlaylist) {
-    const object = await env.MEDIA_BUCKET.get(key);
-    if (!object) return textResponse("Not found", { status: 404 });
-    const body = rewriteM3U8(await object.text(), token);
+    const vpsRes = await vpsFetch(env, `/files/${encodeURIComponent(key)}`);
+    if (!vpsRes.ok) {
+      if (vpsRes.status === 404) {
+        await deleteObjectAndMeta(env, key, meta);
+        return textResponse("Not found", { status: 404 });
+      }
+      return textResponse("Storage unavailable", { status: 502 });
+    }
+    const body = rewriteM3U8(await vpsRes.text(), token);
     const headers = new Headers();
-    object.writeHttpMetadata(headers);
     headers.set("Content-Type", "application/vnd.apple.mpegurl");
     headers.set("Cache-Control", "public, max-age=3600");
     headers.set("Access-Control-Allow-Origin", "*");
@@ -1698,22 +1756,35 @@ async function handleMedia(request, env, url) {
     return new Response(body, { status: 200, headers });
   }
 
+  const size = Number(meta.size || 0);
   let range = null;
   if (rangeHeader) {
-    range = parseRangeHeader(rangeHeader, head.size);
+    range = parseRangeHeader(rangeHeader, size);
     if (!range) {
       return new Response(null, {
         status: 416,
-        headers: { "Content-Range": `bytes */${head.size}` },
+        headers: { "Content-Range": `bytes */${size}` },
       });
     }
   }
 
-  const object = await env.MEDIA_BUCKET.get(key, range ? { range: { offset: range.start, length: range.end - range.start + 1 } } : {});
-  if (!object) return textResponse("Not found", { status: 404 });
+  const fetchHeaders = {};
+  if (range) {
+    fetchHeaders.Range = `bytes=${range.start}-${range.end}`;
+  }
+  const vpsRes = await vpsFetch(env, `/files/${encodeURIComponent(key)}`, {
+    headers: fetchHeaders,
+  });
+  if (!vpsRes.ok) {
+    if (vpsRes.status === 404) {
+      await deleteObjectAndMeta(env, key, meta);
+      return textResponse("Not found", { status: 404 });
+    }
+    return textResponse("Storage unavailable", { status: 502 });
+  }
 
   const headers = new Headers();
-  object.writeHttpMetadata(headers);
+  headers.set("Content-Type", contentType || "application/octet-stream");
   headers.set("Accept-Ranges", "bytes");
   headers.set("Cache-Control", "public, max-age=3600");
   headers.set("Access-Control-Allow-Origin", "*");
@@ -1724,12 +1795,12 @@ async function handleMedia(request, env, url) {
   }
 
   if (range) {
-    headers.set("Content-Range", `bytes ${range.start}-${range.end}/${head.size}`);
+    headers.set("Content-Range", `bytes ${range.start}-${range.end}/${size}`);
     headers.set("Content-Length", String(range.end - range.start + 1));
-    return new Response(object.body, { status: 206, headers });
+    return new Response(vpsRes.body, { status: 206, headers });
   }
 
-  return new Response(object.body, { status: 200, headers });
+  return new Response(vpsRes.body, { status: 200, headers });
 }
 
 async function handleView(request, env, url) {
@@ -1740,18 +1811,16 @@ async function handleView(request, env, url) {
   const verified = await verifyToken(env.TOKEN_SIGNING_SECRET, token, key);
   if (!verified) return textResponse("Invalid token", { status: 403 });
 
-  const head = await env.MEDIA_BUCKET.head(key);
-  if (!head) return textResponse("Not found", { status: 404 });
-
-  const meta = await getMetaForKey(env, key, head);
-  const expiresAt = extractExpiresAt(meta, head);
+  const meta = await readMeta(env, key);
+  if (!meta) return textResponse("Not found", { status: 404 });
+  const expiresAt = extractExpiresAt(meta);
   if (expiresAt && Date.parse(expiresAt) <= Date.now()) {
-    await deleteObjectAndMeta(env, key, head, meta);
+    await deleteObjectAndMeta(env, key, meta);
     return textResponse("Expired", { status: 410 });
   }
 
   const mediaUrl = `/media/${encodeURIComponent(key)}?token=${encodeURIComponent(token)}`;
-  const contentType = head.httpMetadata?.contentType || "application/octet-stream";
+  const contentType = meta.contentType || "application/octet-stream";
   const isPlaylist = key.toLowerCase().endsWith(".m3u8") || contentType.includes("mpegurl");
   const name = meta?.originalName || key.split("/").pop();
   return htmlResponse(viewPage({ mediaUrl, name, contentType, isPlaylist }));
@@ -1763,12 +1832,11 @@ async function handleSharePage(request, env, url) {
   const key = await resolveShortCode(env, code);
   if (!key) return textResponse("Not found", { status: 404 });
 
-  const head = await env.MEDIA_BUCKET.head(key);
-  if (!head) return textResponse("Not found", { status: 404 });
-  const meta = await getMetaForKey(env, key, head);
-  const expiresAt = extractExpiresAt(meta, head);
+  const meta = await readMeta(env, key);
+  if (!meta) return textResponse("Not found", { status: 404 });
+  const expiresAt = extractExpiresAt(meta);
   if (expiresAt && Date.parse(expiresAt) <= Date.now()) {
-    await deleteObjectAndMeta(env, key, head, meta);
+    await deleteObjectAndMeta(env, key, meta);
     return textResponse("Expired", { status: 410 });
   }
 
@@ -1783,8 +1851,8 @@ async function handleSharePage(request, env, url) {
   return htmlResponse(
     sharePage({
       name: meta?.originalName || key.split("/").pop(),
-      size: meta?.size || head.size,
-      uploadedAt: meta?.uploadedAt || head.customMetadata?.uploadedAt,
+      size: meta?.size,
+      uploadedAt: meta?.uploadedAt,
       expiresAt,
       remaining: formatRemainingSeconds(
         Number.isFinite(expiresAtMs) ? Math.floor((expiresAtMs - Date.now()) / 1000) : null
@@ -1801,12 +1869,11 @@ async function handleShortPreview(request, env, url) {
   if (!code) return textResponse("Not found", { status: 404 });
   const key = await resolveShortCode(env, code);
   if (!key) return textResponse("Not found", { status: 404 });
-  const head = await env.MEDIA_BUCKET.head(key);
-  if (!head) return textResponse("Not found", { status: 404 });
-  const meta = await getMetaForKey(env, key, head);
-  const expiresAt = extractExpiresAt(meta, head);
+  const meta = await readMeta(env, key);
+  if (!meta) return textResponse("Not found", { status: 404 });
+  const expiresAt = extractExpiresAt(meta);
   if (expiresAt && Date.parse(expiresAt) <= Date.now()) {
-    await deleteObjectAndMeta(env, key, head, meta);
+    await deleteObjectAndMeta(env, key, meta);
     return textResponse("Expired", { status: 410 });
   }
   const expiresAtMs = expiresAt ? Date.parse(expiresAt) : null;
@@ -1821,15 +1888,17 @@ async function handleShortPreview(request, env, url) {
 async function handleFilesList(request, env, url) {
   const limit = Math.min(Number(url.searchParams.get("limit") || 50), 200);
   const cursor = url.searchParams.get("cursor") || undefined;
-  const listing = await env.MEDIA_BUCKET.list({ cursor, limit });
+  const listing = await env.APP_KV.list({ prefix: "meta:", cursor, limit });
   const items = [];
   const baseUrl = buildBaseUrl(request);
   const now = Date.now();
-  for (const obj of listing.objects) {
-    const head = await env.MEDIA_BUCKET.head(obj.key);
-    if (!head) continue;
-    const meta = await getMetaForKey(env, obj.key, head);
-    const expiresAt = extractExpiresAt(meta, head);
+  for (const entry of listing.keys) {
+    const raw = await env.APP_KV.get(entry.name);
+    if (!raw) continue;
+    const meta = parseJson(raw);
+    if (!meta) continue;
+    const storageKey = entry.name.replace(/^meta:/, "");
+    const expiresAt = extractExpiresAt(meta);
     const expiresAtMs = expiresAt ? Date.parse(expiresAt) : null;
     const expired = Number.isFinite(expiresAtMs) && expiresAtMs <= now;
     let viewUrl = null;
@@ -1839,18 +1908,18 @@ async function handleFilesList(request, env, url) {
       const expiresAtSeconds = Number.isFinite(expiresAtMs)
         ? Math.floor(expiresAtMs / 1000)
         : Math.floor(Date.now() / 1000) + getEnvNumber(env, "MEDIA_TTL_SECONDS", 86400);
-      const token = await createToken(env.TOKEN_SIGNING_SECRET, obj.key, expiresAtSeconds);
-      const urls = buildTokenUrls(request, obj.key, token);
+      const token = await createToken(env.TOKEN_SIGNING_SECRET, storageKey, expiresAtSeconds);
+      const urls = buildTokenUrls(request, storageKey, token);
       viewUrl = urls.viewUrl;
       directUrl = urls.mediaUrl;
       downloadUrl = urls.downloadUrl;
     }
     const shortCode = meta?.shortCode || null;
     items.push({
-      key: obj.key,
-      filename: meta?.originalName || obj.key.split("/").pop(),
-      size: meta?.size || head.size,
-      uploadedAt: meta?.uploadedAt || head.customMetadata?.uploadedAt,
+      key: storageKey,
+      filename: meta?.originalName || storageKey.split("/").pop(),
+      size: meta?.size || 0,
+      uploadedAt: meta?.uploadedAt || null,
       expiresAt,
       remainingSeconds: Number.isFinite(expiresAtMs) ? Math.floor((expiresAtMs - now) / 1000) : null,
       viewUrl,
@@ -1864,44 +1933,41 @@ async function handleFilesList(request, env, url) {
   }
   return jsonResponse({
     items,
-    cursor: listing.truncated ? listing.cursor : null,
-    hasMore: listing.truncated,
+    cursor: listing.list_complete ? null : listing.cursor,
+    hasMore: !listing.list_complete,
   });
 }
 
 async function handleFilesDelete(request, env) {
+  const vpsError = ensureVpsConfig(env);
+  if (vpsError) return textResponse(vpsError, { status: 500 });
   const body = await request.json();
   const key = body.key;
   if (!key) return textResponse("Missing key", { status: 400 });
-  const head = await env.MEDIA_BUCKET.head(key);
   const meta = await readMeta(env, key);
-  if (!head) {
-    await deleteShortCode(env, meta);
-    await deleteMeta(env, key);
-    return textResponse("Not found", { status: 404 });
-  }
-  await deleteObjectAndMeta(env, key, head, meta);
+  await deleteObjectAndMeta(env, key, meta);
   return jsonResponse({ ok: true });
 }
 
 async function handleFilesExtend(request, env) {
+  const vpsError = ensureVpsConfig(env);
+  if (vpsError) return textResponse(vpsError, { status: 500 });
   const body = await request.json();
   const key = body.key;
   const days = Number(body.days);
   if (!key) return textResponse("Missing key", { status: 400 });
   if (![1, 3, 5].includes(days)) return textResponse("Invalid days", { status: 400 });
-  const head = await env.MEDIA_BUCKET.head(key);
-  if (!head) return textResponse("Not found", { status: 404 });
-  const meta = (await getMetaForKey(env, key, head)) || buildMetaFromHead(key, head);
-  const currentExpiresAt = extractExpiresAt(meta, head);
+  const meta = await readMeta(env, key);
+  if (!meta) return textResponse("Not found", { status: 404 });
+  const currentExpiresAt = extractExpiresAt(meta);
   const baseMs = Math.max(Date.now(), currentExpiresAt ? Date.parse(currentExpiresAt) : Date.now());
   const newExpiresAt = new Date(baseMs + days * 86400 * 1000).toISOString();
   const nextMeta = {
     ...meta,
     key,
     originalName: meta.originalName || key.split("/").pop(),
-    size: meta.size || head.size,
-    uploadedAt: meta.uploadedAt || head.customMetadata?.uploadedAt,
+    size: meta.size,
+    uploadedAt: meta.uploadedAt,
     expiresAt: newExpiresAt,
   };
   await saveMeta(env, key, nextMeta);
@@ -1909,12 +1975,13 @@ async function handleFilesExtend(request, env) {
 }
 
 async function handleFilesShorten(request, env) {
+  const vpsError = ensureVpsConfig(env);
+  if (vpsError) return textResponse(vpsError, { status: 500 });
   const body = await request.json();
   const key = body.key;
   if (!key) return textResponse("Missing key", { status: 400 });
-  const head = await env.MEDIA_BUCKET.head(key);
-  if (!head) return textResponse("Not found", { status: 404 });
-  const meta = (await getMetaForKey(env, key, head)) || buildMetaFromHead(key, head);
+  const meta = await readMeta(env, key);
+  if (!meta) return textResponse("Not found", { status: 404 });
   const shortCode = await ensureShortCode(env, key, meta);
   if (!shortCode) return textResponse("Short link unavailable", { status: 500 });
   const baseUrl = buildBaseUrl(request);
@@ -1922,22 +1989,26 @@ async function handleFilesShorten(request, env) {
 }
 
 async function handleCleanup(env) {
+  const vpsError = ensureVpsConfig(env);
+  if (vpsError) return;
   let cursor;
   let total = 0;
   do {
-    const listing = await env.MEDIA_BUCKET.list({ cursor });
-    for (const obj of listing.objects) {
-      const head = await env.MEDIA_BUCKET.head(obj.key);
-      if (!head) continue;
-      const meta = await getMetaForKey(env, obj.key, head);
-      const expiresAt = extractExpiresAt(meta, head);
+    const listing = await env.APP_KV.list({ prefix: "meta:", cursor });
+    for (const entry of listing.keys) {
+      const raw = await env.APP_KV.get(entry.name);
+      if (!raw) continue;
+      const meta = parseJson(raw);
+      if (!meta) continue;
+      const storageKey = entry.name.replace(/^meta:/, "");
+      const expiresAt = extractExpiresAt(meta);
       if (expiresAt && Date.parse(expiresAt) <= Date.now()) {
-        await deleteObjectAndMeta(env, obj.key, head, meta);
+        await deleteObjectAndMeta(env, storageKey, meta);
         continue;
       }
-      total += head.size;
+      total += Number(meta.size || 0);
     }
-    cursor = listing.truncated ? listing.cursor : undefined;
+    cursor = listing.list_complete ? undefined : listing.cursor;
   } while (cursor);
   await usageRequest(env, "/sync-used", { usedBytes: total });
 

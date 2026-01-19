@@ -5,7 +5,7 @@ Temporary public media (image/video/HLS) with 1-day expiry. Admin-only upload, p
 ## Requirements
 
 - Cloudflare Workers
-- Cloudflare R2 bucket
+- VPS storage server (this repo includes `vps-server/`)
 - Cloudflare KV namespace
 - Cloudflare Durable Objects (usage tracking)
 
@@ -13,16 +13,21 @@ Note: Cloudflare Free plan requires Durable Objects created via `new_sqlite_clas
 
 ## Quick setup
 
-1) Create an R2 bucket (example name: `kkinto-media`).
-2) Create a KV namespace and put its IDs into `wrangler.toml`.
+1) Create a KV namespace and put its IDs into `wrangler.toml`.
+2) Start the VPS storage server (see below) and expose it via HTTPS.
 3) Set secrets:
 
 ```
 wrangler secret put ADMIN_PASSWORD
 wrangler secret put TOKEN_SIGNING_SECRET
+wrangler secret put VPS_AUTH_TOKEN
 ```
 
-4) Optional local dev:
+4) Set vars in `wrangler.toml`:
+
+- `VPS_BASE_URL` (your VPS server base URL)
+
+5) Optional local dev:
 
 ```
 cp .env.example .env
@@ -39,8 +44,8 @@ npm run deploy
 
 1) Cloudflare setup
    - Add your domain to Cloudflare and point DNS to Cloudflare.
-   - Create an R2 bucket (example name: `kkinto-media`).
    - Create a KV namespace and put its IDs into `wrangler.toml`.
+   - In `wrangler.toml`, set `VPS_BASE_URL`.
    - In `wrangler.toml`, ensure the Durable Object migration is present (already included).
 
 2) Local one-time setup
@@ -50,6 +55,7 @@ npm run deploy
 ```
 wrangler secret put ADMIN_PASSWORD
 wrangler secret put TOKEN_SIGNING_SECRET
+wrangler secret put VPS_AUTH_TOKEN
 ```
 
 3) Configure Worker route
@@ -69,12 +75,28 @@ git push -u origin main
 ```
 
    - In GitHub repo settings -> Secrets and variables -> Actions, add:
-     - `CF_API_TOKEN` (Cloudflare API token with Workers/R2/KV permissions)
+   - `CF_API_TOKEN` (Cloudflare API token with Workers/KV permissions)
      - `CF_ACCOUNT_ID`
    - GitHub Actions workflow is at `.github/workflows/deploy.yml`.
    - On every push to `main`, GitHub will deploy the Worker.
 
 Note: `ADMIN_PASSWORD` and `TOKEN_SIGNING_SECRET` are stored as Worker secrets and do not need to be in GitHub.
+Note: `VPS_AUTH_TOKEN` is also a Worker secret and must match the VPS server token.
+
+## VPS storage server
+
+The Worker now stores files on a VPS via HTTP. A minimal storage server is included in `vps-server/`.
+
+```
+cd vps-server
+export VPS_AUTH_TOKEN="replace-with-strong-token"
+export STORAGE_DIR="/var/tmp-media/storage"
+export UPLOAD_DIR="/var/tmp-media/uploads"
+export PORT=8787
+node server.js
+```
+
+Expose it via HTTPS (Nginx/Caddy) and set `VPS_BASE_URL` to the public URL (e.g. `https://media.kkinto.com`).
 
 ## Defaults
 
