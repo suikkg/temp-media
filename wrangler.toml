@@ -1,6 +1,9 @@
-name = "kkinto-temp-media"
+name = "kkinto-temp-media-vps"
 main = "src/worker.js"
 compatibility_date = "2024-11-01"
+routes = [
+  { pattern = "media.kkinto.com/*", zone_name = "kkinto.com" }
+]
 
 [triggers]
 crons = ["0 * * * *"]

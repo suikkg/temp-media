@@ -46,6 +46,8 @@ npm run deploy
    - Add your domain to Cloudflare and point DNS to Cloudflare.
    - Create a KV namespace and put its IDs into `wrangler.toml`.
    - In `wrangler.toml`, set `VPS_BASE_URL`.
+   - The VPS Worker name is `kkinto-temp-media-vps` and the route is `media.kkinto.com/*`.
+   - Create a DNS record for `media.kkinto.com` in Cloudflare (proxied) so the Worker route can attach.
    - In `wrangler.toml`, ensure the Durable Object migration is present (already included).
 
 2) Local one-time setup
@@ -79,6 +81,7 @@ git push -u origin main
      - `CF_ACCOUNT_ID`
    - GitHub Actions workflow is at `.github/workflows/deploy.yml`.
    - On every push to `main`, GitHub will deploy the Worker.
+   - The VPS test branch deploys via `.github/workflows/deploy-test.yml`.
 
 Note: `ADMIN_PASSWORD` and `TOKEN_SIGNING_SECRET` are stored as Worker secrets and do not need to be in GitHub.
 Note: `VPS_AUTH_TOKEN` is also a Worker secret and must match the VPS server token.
@@ -96,7 +99,7 @@ export PORT=8787
 node server.js
 ```
 
-Expose it via HTTPS (Nginx/Caddy) and set `VPS_BASE_URL` to the public URL (e.g. `https://media.kkinto.com`).
+Expose it via HTTPS (Nginx/Caddy) and set `VPS_BASE_URL` to the public URL on a different subdomain (e.g. `https://storage.kkinto.com`).
 
 ## Defaults
 
