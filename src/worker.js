@@ -58,26 +58,40 @@ function parseJson(raw) {
   }
 }
 
-function metaKey(key) {
-  return `meta:${key}`;
+function kvPrefix(env) {
+  const raw = String(env.KV_PREFIX || "").trim();
+  if (!raw) return "";
+  return raw.endsWith(":") ? raw : `${raw}:`;
 }
 
-function shortKey(code) {
-  return `short:${code}`;
+function metaKey(env, key) {
+  return `${kvPrefix(env)}meta:${key}`;
+}
+
+function shortKey(env, code) {
+  return `${kvPrefix(env)}short:${code}`;
+}
+
+function uploadKey(env, token) {
+  return `${kvPrefix(env)}upload:${token}`;
+}
+
+function sessionKey(env, token) {
+  return `${kvPrefix(env)}session:${token}`;
 }
 
 async function readMeta(env, key) {
-  const raw = await env.APP_KV.get(metaKey(key));
+  const raw = await env.APP_KV.get(metaKey(env, key));
   const meta = parseJson(raw);
   return meta && typeof meta === "object" ? meta : null;
 }
 
 async function saveMeta(env, key, meta) {
-  await env.APP_KV.put(metaKey(key), JSON.stringify(meta));
+  await env.APP_KV.put(metaKey(env, key), JSON.stringify(meta));
 }
 
 async function deleteMeta(env, key) {
-  await env.APP_KV.delete(metaKey(key));
+  await env.APP_KV.delete(metaKey(env, key));
 }
 
 function extractExpiresAt(meta) {
@@ -88,9 +102,9 @@ async function ensureShortCode(env, key, meta) {
   if (meta?.shortCode) return meta.shortCode;
   for (let attempt = 0; attempt < 6; attempt++) {
     const code = randomShortCode();
-    const existing = await env.APP_KV.get(shortKey(code));
+    const existing = await env.APP_KV.get(shortKey(env, code));
     if (existing) continue;
-    await env.APP_KV.put(shortKey(code), key);
+    await env.APP_KV.put(shortKey(env, code), key);
     const nextMeta = { ...(meta || {}), shortCode: code };
     await saveMeta(env, key, nextMeta);
     return code;
@@ -99,12 +113,12 @@ async function ensureShortCode(env, key, meta) {
 }
 
 async function resolveShortCode(env, code) {
-  return env.APP_KV.get(shortKey(code));
+  return env.APP_KV.get(shortKey(env, code));
 }
 
 async function deleteShortCode(env, meta) {
   if (meta?.shortCode) {
-    await env.APP_KV.delete(shortKey(meta.shortCode));
+    await env.APP_KV.delete(shortKey(env, meta.shortCode));
   }
 }
 
@@ -340,7 +354,7 @@ async function verifyToken(secret, token, key) {
 async function requireAdmin(request, env) {
   const token = getCookie(request, COOKIE_NAME);
   if (!token) return null;
-  const session = await env.APP_KV.get(`session:${token}`);
+  const session = await env.APP_KV.get(sessionKey(env, token));
   return session ? token : null;
 }
 
@@ -1073,7 +1087,14 @@ function adminPage() {
       let groupId = groupInput.value.trim();
       for (const file of files) {
         log('开始上传：' + file.name);
-        const result = await uploadFile(file, groupId || undefined);
+        let result = null;
+        try {
+          result = await uploadFile(file, groupId || undefined);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          log('上传失败：' + message);
+          return;
+        }
         if (!groupId) {
           groupId = result.groupId;
           groupInput.value = groupId;
@@ -1406,7 +1427,7 @@ async function handleLogin(request, env) {
   }
   const token = randomId();
   const sessionTtl = getEnvNumber(env, "SESSION_TTL_SECONDS", 604800);
-  await env.APP_KV.put(`session:${token}`, "1", { expirationTtl: sessionTtl });
+  await env.APP_KV.put(sessionKey(env, token), "1", { expirationTtl: sessionTtl });
   const headers = new Headers();
   setCookie(headers, COOKIE_NAME, token, {
     httpOnly: true,
@@ -1422,7 +1443,7 @@ async function handleLogin(request, env) {
 async function handleLogout(request, env) {
   const token = getCookie(request, COOKIE_NAME);
   if (token) {
-    await env.APP_KV.delete(`session:${token}`);
+    await env.APP_KV.delete(sessionKey(env, token));
   }
   const headers = new Headers();
   setCookie(headers, COOKIE_NAME, "", {
@@ -1476,7 +1497,7 @@ async function handleStats(env) {
 
   let cursor;
   do {
-    const listing = await env.APP_KV.list({ prefix: "meta:", cursor, limit: 1000 });
+    const listing = await env.APP_KV.list({ prefix: `${kvPrefix(env)}meta:`, cursor, limit: 1000 });
     for (const entry of listing.keys) {
       const raw = await env.APP_KV.get(entry.name);
       if (!raw) continue;
@@ -1560,6 +1581,8 @@ async function handleUploadStart(request, env) {
   const uploadedAt = new Date().toISOString();
 
   let uploadId;
+  let vpsStatus = null;
+  let vpsBody = "";
   try {
     const res = await vpsFetch(env, "/uploads/start", {
       method: "POST",
@@ -1573,7 +1596,9 @@ async function handleUploadStart(request, env) {
       }),
     });
     if (!res.ok) {
-      throw new Error(await res.text());
+      vpsStatus = res.status;
+      vpsBody = await res.text();
+      throw new Error("VPS start failed");
     }
     const data = await res.json();
     uploadId = data.uploadId;
@@ -1582,7 +1607,10 @@ async function handleUploadStart(request, env) {
     }
   } catch (error) {
     await usageRequest(env, "/release", { token: uploadToken });
-    return textResponse("Storage unavailable", { status: 502 });
+    const detail = vpsStatus ? ` (${vpsStatus})` : "";
+    const bodyNote = vpsBody ? `: ${vpsBody}` : "";
+    const errorNote = !bodyNote && error instanceof Error && error.message ? `: ${error.message}` : "";
+    return textResponse(`Storage unavailable${detail}${bodyNote || errorNote}`, { status: 502 });
   }
 
   const record = {
@@ -1597,7 +1625,7 @@ async function handleUploadStart(request, env) {
     originalName: filename,
     contentType,
   };
-  await env.APP_KV.put(`upload:${uploadToken}`, JSON.stringify(record), { expirationTtl: 86400 });
+  await env.APP_KV.put(uploadKey(env, uploadToken), JSON.stringify(record), { expirationTtl: 86400 });
 
   return jsonResponse({
     uploadToken,
@@ -1616,7 +1644,7 @@ async function handleUploadPart(request, env, url) {
   if (!uploadToken || !Number.isFinite(partNumber) || partNumber <= 0) {
     return textResponse("Missing uploadToken or partNumber", { status: 400 });
   }
-  const recordRaw = await env.APP_KV.get(`upload:${uploadToken}`);
+  const recordRaw = await env.APP_KV.get(uploadKey(env, uploadToken));
   if (!recordRaw) {
     return textResponse("Upload not found", { status: 404 });
   }
@@ -1626,28 +1654,34 @@ async function handleUploadPart(request, env, url) {
     return textResponse("Empty body", { status: 400 });
   }
 
-  const partRes = await vpsFetch(
-    env,
-    `/uploads/part?uploadId=${encodeURIComponent(record.uploadId)}&partNumber=${partNumber}`,
-    {
-      method: "POST",
-      body,
-    }
-  );
+  let partRes;
+  try {
+    partRes = await vpsFetch(
+      env,
+      `/uploads/part?uploadId=${encodeURIComponent(record.uploadId)}&partNumber=${partNumber}`,
+      {
+        method: "POST",
+        body,
+      }
+    );
+  } catch (error) {
+    return textResponse(`Upload failed: ${error instanceof Error ? error.message : "fetch error"}`, { status: 502 });
+  }
   if (!partRes.ok) {
-    return textResponse("Upload failed", { status: 502 });
+    const message = await partRes.text();
+    return textResponse(`Upload failed (${partRes.status})${message ? `: ${message}` : ""}`, { status: 502 });
   }
 
   record.uploadedBytes += body.byteLength;
   if (record.uploadedBytes > record.size) {
-    await env.APP_KV.delete(`upload:${uploadToken}`);
+    await env.APP_KV.delete(uploadKey(env, uploadToken));
     await usageRequest(env, "/release", { token: uploadToken });
     return textResponse("Upload exceeds declared size", { status: 400 });
   }
 
   record.parts = record.parts || [];
   record.parts.push({ partNumber, size: body.byteLength });
-  await env.APP_KV.put(`upload:${uploadToken}`, JSON.stringify(record), { expirationTtl: 86400 });
+  await env.APP_KV.put(uploadKey(env, uploadToken), JSON.stringify(record), { expirationTtl: 86400 });
 
   return jsonResponse({ ok: true });
 }
@@ -1658,22 +1692,33 @@ async function handleUploadComplete(request, env) {
   const body = await request.json();
   const uploadToken = body.uploadToken;
   if (!uploadToken) return textResponse("Missing uploadToken", { status: 400 });
-  const recordRaw = await env.APP_KV.get(`upload:${uploadToken}`);
+  const recordRaw = await env.APP_KV.get(uploadKey(env, uploadToken));
   if (!recordRaw) return textResponse("Upload not found", { status: 404 });
   const record = JSON.parse(recordRaw);
 
   if (!record.parts || !record.parts.length) {
     return textResponse("No parts uploaded", { status: 400 });
   }
-  const completeRes = await vpsFetch(env, "/uploads/complete", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ uploadId: record.uploadId }),
-  });
-  if (!completeRes.ok) {
-    return textResponse("Upload complete failed", { status: 502 });
+  let completeRes;
+  try {
+    completeRes = await vpsFetch(env, "/uploads/complete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ uploadId: record.uploadId }),
+    });
+  } catch (error) {
+    return textResponse(`Upload complete failed: ${error instanceof Error ? error.message : "fetch error"}`, {
+      status: 502,
+    });
   }
-  await env.APP_KV.delete(`upload:${uploadToken}`);
+  if (!completeRes.ok) {
+    const message = await completeRes.text();
+    return textResponse(
+      `Upload complete failed (${completeRes.status})${message ? `: ${message}` : ""}`,
+      { status: 502 }
+    );
+  }
+  await env.APP_KV.delete(uploadKey(env, uploadToken));
   await usageRequest(env, "/commit", { token: uploadToken });
 
   const mediaTtlSeconds = getEnvNumber(env, "MEDIA_TTL_SECONDS", 86400);
@@ -1890,16 +1935,17 @@ async function handleShortPreview(request, env, url) {
 async function handleFilesList(request, env, url) {
   const limit = Math.min(Number(url.searchParams.get("limit") || 50), 200);
   const cursor = url.searchParams.get("cursor") || undefined;
-  const listing = await env.APP_KV.list({ prefix: "meta:", cursor, limit });
+  const listing = await env.APP_KV.list({ prefix: `${kvPrefix(env)}meta:`, cursor, limit });
   const items = [];
   const baseUrl = buildBaseUrl(request);
   const now = Date.now();
+  const metaPrefix = `${kvPrefix(env)}meta:`;
   for (const entry of listing.keys) {
     const raw = await env.APP_KV.get(entry.name);
     if (!raw) continue;
     const meta = parseJson(raw);
     if (!meta) continue;
-    const storageKey = entry.name.replace(/^meta:/, "");
+    const storageKey = entry.name.replace(metaPrefix, "");
     const expiresAt = extractExpiresAt(meta);
     const expiresAtMs = expiresAt ? Date.parse(expiresAt) : null;
     const expired = Number.isFinite(expiresAtMs) && expiresAtMs <= now;
@@ -1996,13 +2042,14 @@ async function handleCleanup(env) {
   let cursor;
   let total = 0;
   do {
-    const listing = await env.APP_KV.list({ prefix: "meta:", cursor });
+    const listing = await env.APP_KV.list({ prefix: `${kvPrefix(env)}meta:`, cursor });
+    const metaPrefix = `${kvPrefix(env)}meta:`;
     for (const entry of listing.keys) {
       const raw = await env.APP_KV.get(entry.name);
       if (!raw) continue;
       const meta = parseJson(raw);
       if (!meta) continue;
-      const storageKey = entry.name.replace(/^meta:/, "");
+      const storageKey = entry.name.replace(metaPrefix, "");
       const expiresAt = extractExpiresAt(meta);
       if (expiresAt && Date.parse(expiresAt) <= Date.now()) {
         await deleteObjectAndMeta(env, storageKey, meta);
@@ -2017,12 +2064,12 @@ async function handleCleanup(env) {
   const reserved = {};
   let kvCursor;
   do {
-    const list = await env.APP_KV.list({ prefix: "upload:", cursor: kvCursor });
+    const list = await env.APP_KV.list({ prefix: `${kvPrefix(env)}upload:`, cursor: kvCursor });
     for (const key of list.keys) {
       const recordRaw = await env.APP_KV.get(key.name);
       if (!recordRaw) continue;
       const record = JSON.parse(recordRaw);
-      const token = key.name.replace("upload:", "");
+      const token = key.name.replace(`${kvPrefix(env)}upload:`, "");
       const size = Number(record.size);
       if (Number.isFinite(size) && size > 0) {
         reserved[token] = size;
