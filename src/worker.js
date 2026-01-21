@@ -193,9 +193,11 @@ function ensureVpsConfig(env) {
 
 function buildVpsUrl(env, path) {
   const base = new URL(env.VPS_BASE_URL);
-  const normalized = path.startsWith("/") ? path.slice(1) : path;
+  const parsedPath = new URL(path, "http://vps");
+  const normalized = parsedPath.pathname.startsWith("/") ? parsedPath.pathname.slice(1) : parsedPath.pathname;
   const basePath = base.pathname.endsWith("/") ? base.pathname.slice(0, -1) : base.pathname;
   base.pathname = [basePath, normalized].filter(Boolean).join("/");
+  base.search = parsedPath.search;
   return base.toString();
 }
 
