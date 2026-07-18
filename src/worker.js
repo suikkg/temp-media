@@ -383,16 +383,107 @@ function publicHomePage() {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Temp Media</title>
   <style>
-    body { font-family: sans-serif; margin: 32px; }
-    a { color: #0057ff; text-decoration: none; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; background: #f7f8fb; color: #1f2937; }
+    .container { max-width: 800px; margin: 0 auto; padding: 24px 24px 48px; }
+    h1 { margin-bottom: 4px; }
+    .subtitle { color: #6b7280; font-size: 14px; margin-bottom: 24px; }
+    .file-list { display: grid; gap: 12px; }
+    .file-row {
+      background: #fff;
+      border: 1px solid #e6e8ef;
+      border-radius: 10px;
+      padding: 14px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .file-icon { font-size: 28px; flex-shrink: 0; }
+    .file-info { flex: 1; min-width: 0; }
+    .file-name { font-weight: 600; font-size: 14px; word-break: break-all; }
+    .file-meta { font-size: 12px; color: #6b7280; margin-top: 2px; }
+    .file-actions { display: flex; gap: 8px; flex-shrink: 0; }
+    .btn {
+      padding: 8px 14px;
+      border-radius: 6px;
+      border: 1px solid #d1d5db;
+      background: #fff;
+      color: #374151;
+      cursor: pointer;
+      font-size: 13px;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+    .btn-primary { background: #2563eb; color: #fff; border-color: #2563eb; }
+    .btn:hover { opacity: 0.85; }
+    .empty { text-align: center; padding: 40px 0; color: #6b7280; }
+    .login-link { text-align: right; margin-bottom: 16px; }
+    .login-link a { color: #9ca3af; font-size: 13px; text-decoration: none; }
     @media (max-width: 600px) {
-      body { margin: 16px; }
+      .container { padding: 16px 12px 32px; }
+      .file-row { flex-wrap: wrap; }
+      .file-actions { width: 100%; }
+      .btn { flex: 1; text-align: center; }
     }
   </style>
 </head>
 <body>
-  <h1>临时文件服务</h1>
-  <p><a href="/login">管理员登录</a></p>
+  <div class="container">
+    <div class="login-link"><a href="/login">管理</a></div>
+    <h1>临时文件</h1>
+    <div class="subtitle" id="subtitle">加载中...</div>
+    <div class="file-list" id="fileList">
+      <div class="empty">加载中...</div>
+    </div>
+  </div>
+  <script>
+    function formatBytes(bytes) {
+      if (!bytes) return '';
+      var k = 1024;
+      var sizes = ['B', 'KB', 'MB', 'GB'];
+      var i = Math.floor(Math.log(bytes) / Math.log(k));
+      return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+    }
+    function formatDate(value) {
+      if (!value) return '';
+      var d = new Date(value);
+      return isNaN(d.getTime()) ? '' : d.toLocaleString('zh-CN');
+    }
+    function iconFor(filename) {
+      var ext = (filename || '').split('.').pop().toLowerCase();
+      var map = { mp4:'🎬', webm:'🎬', mkv:'🎬', mov:'🎬', avi:'🎬',
+        jpg:'🖼️', jpeg:'🖼️', png:'🖼️', gif:'🖼️', webp:'🖼️', svg:'🖼️', bmp:'🖼️',
+        mp3:'🎵', wav:'🎵', flac:'🎵', ogg:'🎵',
+        zip:'📦', rar:'📦', '7z':'📦', gz:'📦', tar:'📦',
+        pdf:'📄', doc:'📄', docx:'📄', xls:'📄', xlsx:'📄', ppt:'📄', pptx:'📄',
+        exe:'⚙️', msi:'⚙️', apk:'⚙️', dmg:'⚙️', deb:'⚙️' };
+      return map[ext] || '📎';
+    }
+    fetch('/api/public-files').then(function(r) { return r.json(); }).then(function(data) {
+      document.getElementById('subtitle').textContent = data.items.length ? (data.items.length + ' 个文件') : '暂无文件';
+      var list = document.getElementById('fileList');
+      if (!data.items.length) {
+        list.innerHTML = '<div class="empty">暂无文件</div>';
+        return;
+      }
+      list.innerHTML = '';
+      data.items.forEach(function(item) {
+        var row = document.createElement('div');
+        row.className = 'file-row';
+        row.innerHTML = '<div class="file-icon">' + iconFor(item.filename) + '</div>' +
+          '<div class="file-info">' +
+            '<div class="file-name">' + (item.filename || item.key) + '</div>' +
+            '<div class="file-meta">' + formatBytes(item.size) + (item.uploadedAt ? ' · ' + formatDate(item.uploadedAt) : '') + '</div>' +
+          '</div>' +
+          '<div class="file-actions">' +
+            (item.directDlUrl ? '<a class="btn btn-primary" href="' + item.directDlUrl + '">下载</a>' : '') +
+            (item.shortUrl ? '<a class="btn" href="' + item.shortUrl + '">预览</a>' : '') +
+          '</div>';
+        list.appendChild(row);
+      });
+    }).catch(function() {
+      document.getElementById('fileList').innerHTML = '<div class="empty">加载失败</div>';
+    });
+  </script>
 </body>
 </html>`;
 }
@@ -1848,6 +1939,7 @@ async function handleUploadComplete(request, env) {
   const upload = await env.MEDIA_BUCKET.resumeMultipartUpload(record.key, record.uploadId);
   await upload.complete(sortedParts);
   await env.APP_KV.delete(`upload:${uploadToken}`);
+  await env.APP_KV.delete("public:files");
   await usageRequest(env, "/commit", { token: uploadToken });
 
   const mediaTtlSeconds = getEnvNumber(env, "MEDIA_TTL_SECONDS", 86400);
@@ -2200,9 +2292,11 @@ async function handleFilesDelete(request, env) {
   if (!head) {
     await deleteShortCode(env, meta);
     await deleteMeta(env, key);
+    await env.APP_KV.delete("public:files");
     return textResponse("Not found", { status: 404 });
   }
   await deleteObjectAndMeta(env, key, head, meta);
+  await env.APP_KV.delete("public:files");
   return jsonResponse({ ok: true });
 }
 
@@ -2317,6 +2411,52 @@ async function handleCleanup(env) {
   await usageRequest(env, "/sync-reserved", { reserved });
 }
 
+async function handlePublicFiles(request, env) {
+  const cached = await env.APP_KV.get("public:files");
+  if (cached) {
+    return jsonResponse(JSON.parse(cached));
+  }
+
+  const baseUrl = buildBaseUrl(request);
+  const now = Date.now();
+  const items = [];
+
+  let cursor;
+  do {
+    const listing = await env.MEDIA_BUCKET.list({ cursor, limit: 200 });
+    for (const obj of listing.objects) {
+      if (!obj.key) continue;
+      try {
+        const meta = await readMeta(env, obj.key);
+        const shortCode = meta?.shortCode;
+        if (!shortCode) continue;
+        const expiresAt = meta?.expiresAt || null;
+        const expiresAtMs = expiresAt ? Date.parse(expiresAt) : null;
+        if (Number.isFinite(expiresAtMs) && expiresAtMs <= now) continue;
+        items.push({
+          key: obj.key,
+          filename: meta?.originalName || obj.key.split("/").pop(),
+          size: meta?.size || obj.size || 0,
+          uploadedAt: meta?.uploadedAt || null,
+          shortUrl: `${baseUrl}/s/${shortCode}`,
+          directDlUrl: `${baseUrl}/d/${shortCode}`,
+        });
+      } catch (e) {}
+    }
+    cursor = listing.truncated ? listing.cursor : undefined;
+  } while (cursor);
+
+  items.sort((a, b) => {
+    const aTime = a.uploadedAt ? Date.parse(a.uploadedAt) : 0;
+    const bTime = b.uploadedAt ? Date.parse(b.uploadedAt) : 0;
+    return bTime - aTime;
+  });
+
+  const result = { items };
+  await env.APP_KV.put("public:files", JSON.stringify(result), { expirationTtl: 300 });
+  return jsonResponse(result);
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -2338,6 +2478,10 @@ export default {
 
     if (url.pathname === "/") {
       return htmlResponse(publicHomePage());
+    }
+
+    if (url.pathname === "/api/public-files" && request.method === "GET") {
+      return handlePublicFiles(request, env);
     }
 
     if (url.pathname === "/admin") {
