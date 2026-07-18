@@ -130,6 +130,7 @@ async function resolveShortCode(env, code) {
 async function deleteShortCode(env, meta) {
   if (meta?.shortCode) {
     await env.APP_KV.delete(shortKey(meta.shortCode));
+    await env.APP_KV.delete(`dlf:${meta.shortCode}`);
   }
 }
 
@@ -2012,7 +2013,16 @@ async function handleDirectDownload(request, env, url) {
   if (count >= 100) {
     return textResponse("Rate limit exceeded, try again later", { status: 429 });
   }
+
+  const fileKey = `dlf:${code}`;
+  const fileCountRaw = await env.APP_KV.get(fileKey);
+  const fileCount = Number(fileCountRaw) || 0;
+  if (fileCount >= 200) {
+    return textResponse("Download limit for this file reached", { status: 429 });
+  }
+
   await env.APP_KV.put(rateKey, String(count + 1), { expirationTtl: 3600 });
+  await env.APP_KV.put(fileKey, String(fileCount + 1), { expirationTtl: 604800 });
 
   const head = await env.MEDIA_BUCKET.head(key);
   if (!head) return textResponse("Not found", { status: 404 });
