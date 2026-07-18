@@ -243,10 +243,21 @@ function guessContentType(name) {
   if (lower.endsWith(".ts")) return "video/mp2t";
   if (lower.endsWith(".mp4")) return "video/mp4";
   if (lower.endsWith(".webm")) return "video/webm";
+  if (lower.endsWith(".mov")) return "video/quicktime";
+  if (lower.endsWith(".avi")) return "video/x-msvideo";
+  if (lower.endsWith(".mkv")) return "video/x-matroska";
   if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
   if (lower.endsWith(".png")) return "image/png";
   if (lower.endsWith(".webp")) return "image/webp";
   if (lower.endsWith(".gif")) return "image/gif";
+  if (lower.endsWith(".svg")) return "image/svg+xml";
+  if (lower.endsWith(".bmp")) return "image/bmp";
+  if (lower.endsWith(".ico")) return "image/x-icon";
+  if (lower.endsWith(".mp3")) return "audio/mpeg";
+  if (lower.endsWith(".wav")) return "audio/wav";
+  if (lower.endsWith(".ogg") || lower.endsWith(".oga")) return "audio/ogg";
+  if (lower.endsWith(".flac")) return "audio/flac";
+  if (lower.endsWith(".pdf")) return "application/pdf";
   return "application/octet-stream";
 }
 
@@ -1347,8 +1358,7 @@ function statsPage() {
   return adminShell({ title: "Temp Media Stats", active: "stats", body });
 }
 
-function viewPage({ mediaUrl, name, contentType, isPlaylist }) {
-  const isVideo = contentType.startsWith("video/") || contentType.includes("mpegurl");
+function viewPage({ mediaUrl, downloadUrl, name, contentType, isPlaylist, isImage, isAudio, isMedia, size }) {
   const hlsScript = isPlaylist
     ? `<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.8/dist/hls.min.js"></script>
   <script>
@@ -1372,6 +1382,7 @@ function viewPage({ mediaUrl, name, contentType, isPlaylist }) {
     })();
   </script>`
     : "";
+  const sizeText = size ? formatBytes(size) : "";
   return `<!doctype html>
 <html>
 <head>
@@ -1379,19 +1390,51 @@ function viewPage({ mediaUrl, name, contentType, isPlaylist }) {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>${name}</title>
   <style>
-    body { font-family: sans-serif; margin: 24px; }
-    video, img { max-width: 100%; height: auto; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 24px; background: #f7f8fb; color: #1f2937; }
+    .container { max-width: 800px; margin: 0 auto; }
+    h1 { font-size: 20px; word-break: break-all; }
+    video, img, audio { max-width: 100%; height: auto; border-radius: 8px; }
     #notice { margin-top: 12px; color: #b00020; }
+    .file-card {
+      background: #fff;
+      border: 1px solid #e6e8ef;
+      border-radius: 12px;
+      padding: 32px 24px;
+      text-align: center;
+      margin-top: 16px;
+    }
+    .file-card-icon { font-size: 48px; margin-bottom: 12px; }
+    .file-card-name { font-size: 16px; font-weight: 600; word-break: break-all; margin-bottom: 4px; }
+    .file-card-size { font-size: 14px; color: #6b7280; margin-bottom: 16px; }
+    .file-card-type { font-size: 12px; color: #6b7280; text-transform: uppercase; }
+    .btn {
+      display: inline-block;
+      background: #2563eb;
+      color: #fff;
+      padding: 10px 20px;
+      border-radius: 8px;
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 500;
+    }
+    .btn:hover { background: #1e4ed8; }
     @media (max-width: 600px) {
       body { margin: 16px; }
-      h1 { font-size: 20px; }
+      h1 { font-size: 18px; }
     }
   </style>
 </head>
 <body>
-  <h1>${name}</h1>
-  ${isVideo ? (isPlaylist ? `<video id="player" controls></video><div id="notice"></div>` : `<video controls src="${mediaUrl}"></video>`) : `<img alt="${name}" src="${mediaUrl}" />`}
-  ${hlsScript}
+  <div class="container">
+    <h1>${name}</h1>
+    ${isPlaylist ? `<video id="player" controls></video><div id="notice"></div>` : isMedia ? (isImage ? `<img alt="${name}" src="${mediaUrl}" />` : `<video controls src="${mediaUrl}"></video>`) : isAudio ? `<audio controls src="${mediaUrl}"></audio>` : `<div class="file-card">
+      <div class="file-card-icon">&#128196;</div>
+      <div class="file-card-name">${name}</div>
+      <div class="file-card-size">${sizeText}</div>
+      <a class="btn" href="${downloadUrl}">下载文件</a>
+    </div>`}
+    ${hlsScript}
+  </div>
 </body>
 </html>`;
 }
@@ -1922,11 +1965,17 @@ async function handleView(request, env, url) {
 
   const baseUrl = buildBaseUrl(request);
   const mediaUrl = `${baseUrl}/media/${encodeURIComponent(key)}?token=${encodeURIComponent(token)}`;
+  const downloadUrl = `${mediaUrl}&download=1`;
   const derivedType = guessContentType(key);
   const contentType = derivedType !== "application/octet-stream" ? derivedType : (head.httpMetadata?.contentType || "application/octet-stream");
   const isPlaylist = key.toLowerCase().endsWith(".m3u8") || contentType.includes("mpegurl");
+  const isImage = contentType.startsWith("image/");
+  const isAudio = contentType.startsWith("audio/");
+  const isVideo = contentType.startsWith("video/") || contentType.includes("mpegurl");
+  const isMedia = isImage || isVideo || isAudio || isPlaylist;
   const name = meta?.originalName || key.split("/").pop();
-  return htmlResponse(viewPage({ mediaUrl, name, contentType, isPlaylist }));
+  const size = meta?.size || head.size;
+  return htmlResponse(viewPage({ mediaUrl, downloadUrl, name, contentType, isPlaylist, isImage, isAudio, isMedia, size }));
 }
 
 async function handleSharePage(request, env, url) {
