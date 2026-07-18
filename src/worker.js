@@ -1879,7 +1879,12 @@ async function handleMedia(request, env, url) {
 
   const headers = new Headers();
   object.writeHttpMetadata(headers);
+  const extType = guessContentType(key);
+  if (extType !== "application/octet-stream") {
+    headers.set("Content-Type", extType);
+  }
   headers.set("Accept-Ranges", "bytes");
+  headers.set("X-Content-Type-Options", "nosniff");
   headers.set("Cache-Control", "public, max-age=3600");
   headers.set("Access-Control-Allow-Origin", "*");
   headers.set("Access-Control-Allow-Headers", "Range,Content-Type");
@@ -1917,7 +1922,8 @@ async function handleView(request, env, url) {
 
   const baseUrl = buildBaseUrl(request);
   const mediaUrl = `${baseUrl}/media/${encodeURIComponent(key)}?token=${encodeURIComponent(token)}`;
-  const contentType = head.httpMetadata?.contentType || "application/octet-stream";
+  const derivedType = guessContentType(key);
+  const contentType = derivedType !== "application/octet-stream" ? derivedType : (head.httpMetadata?.contentType || "application/octet-stream");
   const isPlaylist = key.toLowerCase().endsWith(".m3u8") || contentType.includes("mpegurl");
   const name = meta?.originalName || key.split("/").pop();
   return htmlResponse(viewPage({ mediaUrl, name, contentType, isPlaylist }));
