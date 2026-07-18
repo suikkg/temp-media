@@ -288,7 +288,9 @@ async function hmacSign(secret, message) {
 }
 
 async function createToken(secret, key, expiresAtSeconds) {
-  const payload = JSON.stringify({ k: key, exp: expiresAtSeconds });
+  const slashIdx = key.indexOf("/");
+  const group = slashIdx > 0 ? key.substring(0, slashIdx) : null;
+  const payload = JSON.stringify({ k: key, exp: expiresAtSeconds, g: group });
   const payloadBytes = new TextEncoder().encode(payload);
   const payloadB64 = base64UrlEncode(payloadBytes);
   const signature = await hmacSign(secret, payload);
@@ -304,9 +306,13 @@ async function verifyToken(secret, token, key) {
     const expectedSignature = await hmacSign(secret, payload);
     if (!timingSafeEqual(signature, expectedSignature)) return null;
     const data = JSON.parse(payload);
-    if (!data || data.k !== key) return null;
-    if (typeof data.exp !== "number" || Date.now() / 1000 > data.exp) return null;
-    return data;
+    if (!data || typeof data.exp !== "number" || Date.now() / 1000 > data.exp) return null;
+    if (data.k === key) return data;
+    if (data.g) {
+      const keySlashIdx = key.indexOf("/");
+      if (keySlashIdx > 0 && key.startsWith(data.g + "/")) return data;
+    }
+    return null;
   } catch (error) {
     return null;
   }
@@ -468,6 +474,46 @@ function adminStyles() {
       min-height: 64px;
       font-size: 12px;
     }
+    .progress-wrap { margin-top: 12px; display: none; }
+    .progress-wrap.active { display: block; }
+    .progress-bar-wrap { background: #eef0f5; border-radius: 999px; height: 8px; overflow: hidden; }
+    .progress-bar-fill { background: var(--primary); height: 100%; width: 0%; transition: width 0.3s ease; border-radius: 999px; }
+    .progress-text { font-size: 12px; color: var(--muted); margin-top: 4px; }
+    .drop-zone {
+      border: 2px dashed var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s ease, background 0.2s ease;
+    }
+    .drop-zone.drag-over { border-color: var(--primary); background: #eef2ff; }
+    .drop-zone-text { font-size: 14px; color: var(--muted); }
+    .drop-zone-text b { color: var(--text); }
+    .toast {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: #1f2937;
+      color: #fff;
+      padding: 10px 16px;
+      border-radius: 8px;
+      font-size: 13px;
+      opacity: 0;
+      transform: translateY(10px);
+      transition: opacity 0.25s ease, transform 0.25s ease;
+      pointer-events: none;
+      z-index: 999;
+    }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    .skeleton {
+      background: linear-gradient(90deg, #eef0f5 25%, #d9dce3 50%, #eef0f5 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.5s infinite;
+      border-radius: 6px;
+      height: 16px;
+    }
+    @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
     .links { display: grid; gap: 8px; margin-top: 12px; }
     .link-item {
       display: flex;
@@ -595,7 +641,7 @@ function adminPage() {
     <div class="card-header">
       <div>
         <h2>上传文件</h2>
-        <div class="muted">同一组 HLS 文件请填写相同的 Group ID。</div>
+        <div class="muted">同一组 HLS 文件请填写相同的 Group ID。拖拽或点击选择文件。</div>
       </div>
     </div>
     <div class="form-grid">
@@ -605,11 +651,21 @@ function adminPage() {
       </div>
       <div>
         <label for="files">选择文件</label>
-        <input id="files" type="file" multiple />
+        <div class="drop-zone" id="dropZone">
+          <div class="drop-zone-text">拖拽文件到此处，或 <b>点击选择</b></div>
+          <input id="files" type="file" multiple style="display:none" />
+          <div style="margin-top: 8px; font-size: 12px; color: var(--muted)" id="fileCount"></div>
+        </div>
       </div>
     </div>
     <div class="actions-row" style="margin-top: 12px;">
       <button class="btn" id="upload">开始上传</button>
+    </div>
+    <div class="progress-wrap" id="progressWrap">
+      <div class="progress-bar-wrap">
+        <div class="progress-bar-fill" id="uploadProgressBar"></div>
+      </div>
+      <div class="progress-text" id="uploadProgressText"></div>
     </div>
     <div class="log" id="log" style="margin-top: 12px;"></div>
     <div class="links" id="links"></div>
@@ -660,9 +716,49 @@ function adminPage() {
     const filesSummaryEl = document.getElementById('filesSummary');
     const refreshFilesBtn = document.getElementById('refreshFiles');
     const loadMoreFilesBtn = document.getElementById('loadMoreFiles');
+    const fileInput = document.getElementById('files');
+    const dropZone = document.getElementById('dropZone');
+    const fileCountEl = document.getElementById('fileCount');
+    const uploadBtn = document.getElementById('upload');
+    const progressWrap = document.getElementById('progressWrap');
+    const uploadProgressBar = document.getElementById('uploadProgressBar');
+    const uploadProgressText = document.getElementById('uploadProgressText');
     let filesCursor = null;
     let filesLoading = false;
     let loadedCount = 0;
+    let uploading = false;
+    let maxTotal = 0;
+
+    const toastEl = document.createElement('div');
+    toastEl.className = 'toast';
+    document.body.appendChild(toastEl);
+    let toastTimer;
+    function showToast(msg) {
+      toastEl.textContent = msg;
+      toastEl.classList.add('show');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(function () { toastEl.classList.remove('show'); }, 2000);
+    }
+
+    function updateFileCount() {
+      const count = fileInput.files.length;
+      fileCountEl.textContent = count ? '已选择 ' + count + ' 个文件' : '';
+    }
+
+    dropZone.addEventListener('click', function () { fileInput.click(); });
+    dropZone.addEventListener('dragover', function (e) { e.preventDefault(); dropZone.classList.add('drag-over'); });
+    dropZone.addEventListener('dragleave', function () { dropZone.classList.remove('drag-over'); });
+    dropZone.addEventListener('drop', function (e) {
+      e.preventDefault();
+      dropZone.classList.remove('drag-over');
+      const dt = e.dataTransfer;
+      if (dt && dt.files.length) {
+        fileInput.files = dt.files;
+        updateFileCount();
+      }
+    });
+    fileInput.addEventListener('change', updateFileCount);
+    const MAX_FILE_BYTES = 1073741824;
 
     function log(message) {
       logEl.textContent += message + "\\n";
@@ -709,7 +805,7 @@ function adminPage() {
     function copyText(text) {
       if (!text) return;
       if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text);
+        navigator.clipboard.writeText(text).then(function () { showToast('已复制到剪贴板'); }).catch(function () { window.prompt('复制链接', text); });
       } else {
         window.prompt('复制链接', text);
       }
@@ -969,11 +1065,12 @@ function adminPage() {
       const used = data.totalBytes;
       const reserved = data.reservedBytes || 0;
       const total = used + reserved;
-      const maxTotal = data.maxTotalBytes || 0;
-      const percent = maxTotal ? Math.min(100, Math.round(total / maxTotal * 100)) : 0;
+      const maxTotalBytes = data.maxTotalBytes || 0;
+      maxTotal = maxTotalBytes;
+      const percent = maxTotalBytes ? Math.min(100, Math.round(total / maxTotalBytes * 100)) : 0;
       statusTotalEl.textContent = formatBytes(total);
       statusBreakdownEl.textContent = '已用 ' + formatBytes(used) + ' · 预留 ' + formatBytes(reserved);
-      statusLimitEl.textContent = formatBytes(maxTotal);
+      statusLimitEl.textContent = formatBytes(maxTotalBytes);
       statusPercentEl.textContent = percent + '%';
       statusMaxFileEl.textContent = formatBytes(data.maxFileBytes || 0);
       statusTtlEl.textContent = '保留 ' + formatDuration(data.mediaTtlSeconds);
@@ -998,8 +1095,9 @@ function adminPage() {
       return res.json();
     }
 
-    async function uploadPart(uploadToken, partNumber, chunk) {
-      const res = await fetch('/api/uploads/part?uploadToken=' + encodeURIComponent(uploadToken) + '&partNumber=' + partNumber, {
+    async function uploadPart(uploadToken, key, uploadId, partNumber, chunk) {
+      const params = 'uploadToken=' + encodeURIComponent(uploadToken) + '&key=' + encodeURIComponent(key) + '&uploadId=' + encodeURIComponent(uploadId) + '&partNumber=' + partNumber;
+      const res = await fetch('/api/uploads/part?' + params, {
         method: 'POST',
         body: chunk
       });
@@ -1009,11 +1107,11 @@ function adminPage() {
       return res.json();
     }
 
-    async function completeUpload(uploadToken) {
+    async function completeUpload(uploadToken, parts) {
       const res = await fetch('/api/uploads/complete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ uploadToken })
+        body: JSON.stringify({ uploadToken, parts })
       });
       if (!res.ok) {
         throw new Error(await res.text());
@@ -1021,46 +1119,94 @@ function adminPage() {
       return res.json();
     }
 
-    async function uploadFile(file, groupId) {
+    async function uploadFile(file, groupId, bytesOffset) {
       const start = await startUpload(file, groupId);
       const partSize = start.partSize;
       const totalParts = Math.ceil(file.size / partSize);
-      let offset = 0;
-      for (let partNumber = 1; partNumber <= totalParts; partNumber++) {
-        const chunk = file.slice(offset, offset + partSize);
-        await uploadPart(start.uploadToken, partNumber, chunk);
-        offset += partSize;
-        log('上传分片 ' + partNumber + '/' + totalParts + ' : ' + file.name);
+      const parts = [];
+      let uploadedBytes = 0;
+      const CONCURRENT = 3;
+
+      const tasks = [];
+      for (let pn = 1; pn <= totalParts; pn++) {
+        const partNumber = pn;
+        const chunkStart = (partNumber - 1) * partSize;
+        const chunk = file.slice(chunkStart, Math.min(chunkStart + partSize, file.size));
+        tasks.push({ partNumber, chunk });
       }
-      const complete = await completeUpload(start.uploadToken);
-      return { ...complete, groupId: start.groupId };
+
+      for (let i = 0; i < tasks.length; i += CONCURRENT) {
+        const batch = tasks.slice(i, i + CONCURRENT);
+        const results = await Promise.all(
+          batch.map((t) =>
+            uploadPart(start.uploadToken, start.key, start.uploadId, t.partNumber, t.chunk).then((r) => {
+              uploadedBytes += t.chunk.size;
+              const overall = bytesOffset + uploadedBytes;
+              const pct = maxTotal > 0 ? Math.round(overall / maxTotal * 100) : 0;
+              uploadProgressBar.style.width = pct + '%';
+              uploadProgressText.textContent = file.name + ' : ' + formatBytes(overall) + ' / ' + formatBytes(maxTotal) + ' (' + pct + '%)';
+              return r;
+            })
+          )
+        );
+        parts.push(...results);
+        log('上传分片 ' + (i + 1) + '-' + Math.min(i + CONCURRENT, totalParts) + '/' + totalParts + ' : ' + file.name);
+      }
+
+      const sortedParts = parts.sort((a, b) => a.partNumber - b.partNumber).map((p) => ({ partNumber: p.partNumber, etag: p.etag }));
+      const complete = await completeUpload(start.uploadToken, sortedParts);
+      return { ...complete, groupId: start.groupId, size: file.size };
     }
 
-    document.getElementById('upload').addEventListener('click', async (event) => {
+    uploadBtn.addEventListener('click', async (event) => {
       event.preventDefault();
-      linksEl.textContent = '';
-      logEl.textContent = '';
-      const files = Array.from(document.getElementById('files').files);
+      if (uploading) return;
+      const files = Array.from(fileInput.files);
       if (!files.length) {
         log('请选择文件。');
         return;
       }
-      let groupId = groupInput.value.trim();
-      for (const file of files) {
-        log('开始上传：' + file.name);
-        const result = await uploadFile(file, groupId || undefined);
-        if (!groupId) {
-          groupId = result.groupId;
-          groupInput.value = groupId;
+      for (const f of files) {
+        if (f.size > MAX_FILE_BYTES) {
+          log('文件 ' + f.name + ' 超过单文件大小限制（' + formatBytes(MAX_FILE_BYTES) + '）');
+          return;
         }
-        log('上传完成：' + file.name);
-        addLinkItem(file.name + ' - 预览链接', result.viewUrl);
-        addLinkItem(file.name + ' - 下载链接', result.downloadUrl || result.mediaUrl);
-        addLinkItem(file.name + ' - 短链接', result.shortUrl);
-        addLinkItem(file.name + ' - 分享页', result.sharePageUrl);
       }
-      await refreshStatus();
-      await loadFiles(true);
+      uploading = true;
+      uploadBtn.disabled = true;
+      uploadBtn.textContent = '上传中...';
+      linksEl.textContent = '';
+      logEl.textContent = '';
+      progressWrap.classList.add('active');
+      uploadProgressBar.style.width = '0%';
+      uploadProgressText.textContent = '准备上传...';
+      let groupId = groupInput.value.trim();
+      let totalUploaded = 0;
+      try {
+        for (const file of files) {
+          log('开始上传：' + file.name);
+          const result = await uploadFile(file, groupId || undefined, totalUploaded);
+          totalUploaded += result.size;
+          if (!groupId) {
+            groupId = result.groupId;
+            groupInput.value = groupId;
+          }
+          log('上传完成：' + file.name);
+          addLinkItem(file.name + ' - 预览链接', result.viewUrl);
+          addLinkItem(file.name + ' - 下载链接', result.downloadUrl || result.mediaUrl);
+          addLinkItem(file.name + ' - 短链接', result.shortUrl);
+          addLinkItem(file.name + ' - 分享页', result.sharePageUrl);
+        }
+        await refreshStatus();
+        await loadFiles(true);
+      } catch (err) {
+        log('上传失败：' + (err.message || '未知错误'));
+      } finally {
+        uploading = false;
+        uploadBtn.disabled = false;
+        uploadBtn.textContent = '开始上传';
+        setTimeout(function () { progressWrap.classList.remove('active'); }, 1500);
+      }
     });
 
     refreshStatus();
@@ -1449,35 +1595,68 @@ async function handleStats(env) {
   let nextExpiryAt = null;
   let latestUploadAt = null;
 
+  const allKeys = [];
   let cursor;
   do {
     const listing = await env.MEDIA_BUCKET.list({ cursor, limit: 1000 });
     for (const obj of listing.objects) {
       fileCount += 1;
       totalBytes += obj.size || 0;
-      const head = await env.MEDIA_BUCKET.head(obj.key);
-      if (!head) continue;
-      const meta = await readMeta(env, obj.key);
-      const expiresAt = meta?.expiresAt || head.customMetadata?.expiresAt || null;
-      const expiresAtMs = expiresAt ? Date.parse(expiresAt) : NaN;
-      if (Number.isFinite(expiresAtMs)) {
-        if (expiresAtMs <= now) {
-          expiredCount += 1;
-        } else {
-          if (expiresAtMs <= now + dayMs) expiring1d += 1;
-          if (expiresAtMs <= now + dayMs * 3) expiring3d += 1;
-          if (expiresAtMs <= now + dayMs * 7) expiring7d += 1;
-          if (!nextExpiryAt || expiresAtMs < nextExpiryAt) nextExpiryAt = expiresAtMs;
-        }
-      }
-      const uploadedAt = meta?.uploadedAt || head.customMetadata?.uploadedAt || null;
-      const uploadedAtMs = uploadedAt ? Date.parse(uploadedAt) : NaN;
-      if (Number.isFinite(uploadedAtMs)) {
-        if (!latestUploadAt || uploadedAtMs > latestUploadAt) latestUploadAt = uploadedAtMs;
-      }
+      allKeys.push(obj.key);
     }
     cursor = listing.truncated ? listing.cursor : undefined;
   } while (cursor);
+
+  const metaMap = new Map();
+  const KV_BATCH = 128;
+  for (let i = 0; i < allKeys.length; i += KV_BATCH) {
+    const chunk = allKeys.slice(i, i + KV_BATCH);
+    const metaResults = await Promise.allSettled(
+      chunk.map((key) => readMeta(env, key))
+    );
+    chunk.forEach((key, j) => {
+      if (metaResults[j].status === "fulfilled" && metaResults[j].value) {
+        metaMap.set(key, metaResults[j].value);
+      }
+    });
+  }
+
+  const needHead = allKeys.filter((key) => !metaMap.has(key));
+  const headMap = new Map();
+  const HEAD_CONCURRENCY = 8;
+  for (let i = 0; i < needHead.length; i += HEAD_CONCURRENCY) {
+    const chunk = needHead.slice(i, i + HEAD_CONCURRENCY);
+    const headResults = await Promise.allSettled(
+      chunk.map((key) => env.MEDIA_BUCKET.head(key))
+    );
+    chunk.forEach((key, j) => {
+      if (headResults[j].status === "fulfilled" && headResults[j].value) {
+        headMap.set(key, headResults[j].value);
+      }
+    });
+  }
+
+  for (const key of allKeys) {
+    const meta = metaMap.get(key);
+    const head = headMap.get(key);
+    const expiresAt = meta?.expiresAt || head?.customMetadata?.expiresAt || null;
+    const expiresAtMs = expiresAt ? Date.parse(expiresAt) : NaN;
+    if (Number.isFinite(expiresAtMs)) {
+      if (expiresAtMs <= now) {
+        expiredCount += 1;
+      } else {
+        if (expiresAtMs <= now + dayMs) expiring1d += 1;
+        if (expiresAtMs <= now + dayMs * 3) expiring3d += 1;
+        if (expiresAtMs <= now + dayMs * 7) expiring7d += 1;
+        if (!nextExpiryAt || expiresAtMs < nextExpiryAt) nextExpiryAt = expiresAtMs;
+      }
+    }
+    const uploadedAt = meta?.uploadedAt || head?.customMetadata?.uploadedAt || null;
+    const uploadedAtMs = uploadedAt ? Date.parse(uploadedAt) : NaN;
+    if (Number.isFinite(uploadedAtMs)) {
+      if (!latestUploadAt || uploadedAtMs > latestUploadAt) latestUploadAt = uploadedAtMs;
+    }
+  }
 
   return jsonResponse({
     usedBytes: usage.usedBytes,
@@ -1552,8 +1731,6 @@ async function handleUploadStart(request, env) {
     key,
     uploadId: upload.uploadId,
     size,
-    uploadedBytes: 0,
-    partSize: PART_SIZE_BYTES,
     groupId,
     expiresAt,
     uploadedAt,
@@ -1564,6 +1741,7 @@ async function handleUploadStart(request, env) {
   return jsonResponse({
     uploadToken,
     key,
+    uploadId: upload.uploadId,
     groupId,
     partSize: PART_SIZE_BYTES,
     expiresAt,
@@ -1573,52 +1751,36 @@ async function handleUploadStart(request, env) {
 async function handleUploadPart(request, env, url) {
   const uploadToken = url.searchParams.get("uploadToken");
   const partNumber = Number(url.searchParams.get("partNumber"));
-  if (!uploadToken || !Number.isFinite(partNumber) || partNumber <= 0) {
-    return textResponse("Missing uploadToken or partNumber", { status: 400 });
+  const key = url.searchParams.get("key");
+  const uploadId = url.searchParams.get("uploadId");
+  if (!uploadToken || !key || !uploadId || !Number.isFinite(partNumber) || partNumber <= 0) {
+    return textResponse("Missing parameters", { status: 400 });
   }
-  const recordRaw = await env.APP_KV.get(`upload:${uploadToken}`);
-  if (!recordRaw) {
-    return textResponse("Upload not found", { status: 404 });
-  }
-  const record = JSON.parse(recordRaw);
   const body = await request.arrayBuffer();
   if (!body.byteLength) {
     return textResponse("Empty body", { status: 400 });
   }
 
-  const upload = await env.MEDIA_BUCKET.resumeMultipartUpload(record.key, record.uploadId);
+  const upload = await env.MEDIA_BUCKET.resumeMultipartUpload(key, uploadId);
   const part = await upload.uploadPart(partNumber, body);
 
-  record.uploadedBytes += body.byteLength;
-  if (record.uploadedBytes > record.size) {
-    await upload.abort();
-    await env.APP_KV.delete(`upload:${uploadToken}`);
-    await usageRequest(env, "/release", { token: uploadToken });
-    return textResponse("Upload exceeds declared size", { status: 400 });
-  }
-
-  record.parts = record.parts || [];
-  record.parts.push({ partNumber, etag: part.etag });
-  await env.APP_KV.put(`upload:${uploadToken}`, JSON.stringify(record), { expirationTtl: 86400 });
-
-  return jsonResponse({ etag: part.etag });
+  return jsonResponse({ etag: part.etag, partNumber });
 }
 
 async function handleUploadComplete(request, env) {
   const body = await request.json();
   const uploadToken = body.uploadToken;
+  const parts = body.parts;
   if (!uploadToken) return textResponse("Missing uploadToken", { status: 400 });
+  if (!Array.isArray(parts) || !parts.length) return textResponse("No parts provided", { status: 400 });
   const recordRaw = await env.APP_KV.get(`upload:${uploadToken}`);
   if (!recordRaw) return textResponse("Upload not found", { status: 404 });
   const record = JSON.parse(recordRaw);
 
-  if (!record.parts || !record.parts.length) {
-    return textResponse("No parts uploaded", { status: 400 });
-  }
-  const parts = record.parts.sort((a, b) => a.partNumber - b.partNumber);
+  const sortedParts = parts.sort((a, b) => a.partNumber - b.partNumber);
 
   const upload = await env.MEDIA_BUCKET.resumeMultipartUpload(record.key, record.uploadId);
-  await upload.complete(parts);
+  await upload.complete(sortedParts);
   await env.APP_KV.delete(`upload:${uploadToken}`);
   await usageRequest(env, "/commit", { token: uploadToken });
 
@@ -1822,14 +1984,41 @@ async function handleFilesList(request, env, url) {
   const limit = Math.min(Number(url.searchParams.get("limit") || 50), 200);
   const cursor = url.searchParams.get("cursor") || undefined;
   const listing = await env.MEDIA_BUCKET.list({ cursor, limit });
-  const items = [];
   const baseUrl = buildBaseUrl(request);
   const now = Date.now();
+
+  const metaMap = new Map();
+  const metaResults = await Promise.allSettled(
+    listing.objects.map((obj) => readMeta(env, obj.key))
+  );
+  listing.objects.forEach((obj, i) => {
+    if (metaResults[i].status === "fulfilled" && metaResults[i].value) {
+      metaMap.set(obj.key, metaResults[i].value);
+    }
+  });
+
+  const needHead = listing.objects.filter((obj) => !metaMap.has(obj.key));
+  const headMap = new Map();
+  const CONCURRENCY = 8;
+  for (let i = 0; i < needHead.length; i += CONCURRENCY) {
+    const chunk = needHead.slice(i, i + CONCURRENCY);
+    const headResults = await Promise.allSettled(
+      chunk.map((obj) => env.MEDIA_BUCKET.head(obj.key))
+    );
+    chunk.forEach((obj, j) => {
+      if (headResults[j].status === "fulfilled" && headResults[j].value) {
+        headMap.set(obj.key, headResults[j].value);
+      }
+    });
+  }
+
+  const items = [];
   for (const obj of listing.objects) {
-    const head = await env.MEDIA_BUCKET.head(obj.key);
-    if (!head) continue;
-    const meta = await getMetaForKey(env, obj.key, head);
-    const expiresAt = extractExpiresAt(meta, head);
+    const meta = metaMap.get(obj.key);
+    const head = headMap.get(obj.key);
+    if (!meta && !head) continue;
+    const combined = meta || buildMetaFromHead(obj.key, head);
+    const expiresAt = extractExpiresAt(combined, head);
     const expiresAtMs = expiresAt ? Date.parse(expiresAt) : null;
     const expired = Number.isFinite(expiresAtMs) && expiresAtMs <= now;
     let viewUrl = null;
@@ -1845,12 +2034,12 @@ async function handleFilesList(request, env, url) {
       directUrl = urls.mediaUrl;
       downloadUrl = urls.downloadUrl;
     }
-    const shortCode = meta?.shortCode || null;
+    const shortCode = combined.shortCode || null;
     items.push({
       key: obj.key,
-      filename: meta?.originalName || obj.key.split("/").pop(),
-      size: meta?.size || head.size,
-      uploadedAt: meta?.uploadedAt || head.customMetadata?.uploadedAt,
+      filename: combined.originalName || obj.key.split("/").pop(),
+      size: combined.size || (head ? head.size : 0),
+      uploadedAt: combined.uploadedAt || (head ? head.customMetadata?.uploadedAt : null),
       expiresAt,
       remainingSeconds: Number.isFinite(expiresAtMs) ? Math.floor((expiresAtMs - now) / 1000) : null,
       viewUrl,
@@ -1922,34 +2111,69 @@ async function handleFilesShorten(request, env) {
 }
 
 async function handleCleanup(env) {
-  let cursor;
+  let c;
   let total = 0;
+  const now = Date.now();
+  const allKeys = [];
   do {
-    const listing = await env.MEDIA_BUCKET.list({ cursor });
+    const listing = await env.MEDIA_BUCKET.list({ cursor: c });
     for (const obj of listing.objects) {
-      const head = await env.MEDIA_BUCKET.head(obj.key);
-      if (!head) continue;
-      const meta = await getMetaForKey(env, obj.key, head);
-      const expiresAt = extractExpiresAt(meta, head);
-      if (expiresAt && Date.parse(expiresAt) <= Date.now()) {
-        await deleteObjectAndMeta(env, obj.key, head, meta);
-        continue;
-      }
-      total += head.size;
+      allKeys.push(obj.key);
     }
-    cursor = listing.truncated ? listing.cursor : undefined;
-  } while (cursor);
+    c = listing.truncated ? listing.cursor : undefined;
+  } while (c);
+
+  const metaMap = new Map();
+  const KV_BATCH = 128;
+  for (let i = 0; i < allKeys.length; i += KV_BATCH) {
+    const chunk = allKeys.slice(i, i + KV_BATCH);
+    const metaResults = await Promise.allSettled(
+      chunk.map((key) => readMeta(env, key))
+    );
+    chunk.forEach((key, j) => {
+      if (metaResults[j].status === "fulfilled" && metaResults[j].value) {
+        metaMap.set(key, metaResults[j].value);
+      }
+    });
+  }
+
+  const needHead = allKeys.filter((key) => !metaMap.has(key));
+  const headMap = new Map();
+  const HEAD_CONCURRENCY = 8;
+  for (let i = 0; i < needHead.length; i += HEAD_CONCURRENCY) {
+    const chunk = needHead.slice(i, i + HEAD_CONCURRENCY);
+    const headResults = await Promise.allSettled(
+      chunk.map((key) => env.MEDIA_BUCKET.head(key))
+    );
+    chunk.forEach((key, j) => {
+      if (headResults[j].status === "fulfilled" && headResults[j].value) {
+        headMap.set(key, headResults[j].value);
+      }
+    });
+  }
+
+  for (const key of allKeys) {
+    const meta = metaMap.get(key);
+    const head = headMap.get(key);
+    if (!head && !meta) continue;
+    const expiresAt = meta?.expiresAt || head?.customMetadata?.expiresAt || null;
+    if (expiresAt && Date.parse(expiresAt) <= now) {
+      await deleteObjectAndMeta(env, key, head || { size: meta?.size }, meta);
+      continue;
+    }
+    total += head ? head.size || 0 : (meta?.size || 0);
+  }
   await usageRequest(env, "/sync-used", { usedBytes: total });
 
   const reserved = {};
   let kvCursor;
   do {
     const list = await env.APP_KV.list({ prefix: "upload:", cursor: kvCursor });
-    for (const key of list.keys) {
-      const recordRaw = await env.APP_KV.get(key.name);
+    for (const kvKey of list.keys) {
+      const recordRaw = await env.APP_KV.get(kvKey.name);
       if (!recordRaw) continue;
       const record = JSON.parse(recordRaw);
-      const token = key.name.replace("upload:", "");
+      const token = kvKey.name.replace("upload:", "");
       const size = Number(record.size);
       if (Number.isFinite(size) && size > 0) {
         reserved[token] = size;
