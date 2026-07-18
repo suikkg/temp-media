@@ -6,6 +6,7 @@ const SHORT_CODE_LENGTH = 7;
 function jsonResponse(data, init = {}) {
   const headers = new Headers(init.headers || {});
   headers.set("Content-Type", "application/json");
+  headers.set("Cache-Control", "no-store, must-revalidate");
   return new Response(JSON.stringify(data), { ...init, headers });
 }
 
@@ -14,12 +15,14 @@ function textResponse(text, init = {}) {
   if (!headers.has("Content-Type")) {
     headers.set("Content-Type", "text/plain; charset=utf-8");
   }
+  headers.set("Cache-Control", "no-store, must-revalidate");
   return new Response(text, { ...init, headers });
 }
 
 function htmlResponse(html, init = {}) {
   const headers = new Headers(init.headers || {});
   headers.set("Content-Type", "text/html; charset=utf-8");
+  headers.set("Cache-Control", "no-store, must-revalidate");
   return new Response(html, { ...init, headers });
 }
 
@@ -1912,7 +1915,8 @@ async function handleView(request, env, url) {
     return textResponse("Expired", { status: 410 });
   }
 
-  const mediaUrl = `/media/${encodeURIComponent(key)}?token=${encodeURIComponent(token)}`;
+  const baseUrl = buildBaseUrl(request);
+  const mediaUrl = `${baseUrl}/media/${encodeURIComponent(key)}?token=${encodeURIComponent(token)}`;
   const contentType = head.httpMetadata?.contentType || "application/octet-stream";
   const isPlaylist = key.toLowerCase().endsWith(".m3u8") || contentType.includes("mpegurl");
   const name = meta?.originalName || key.split("/").pop();
@@ -1977,7 +1981,10 @@ async function handleShortPreview(request, env, url) {
     : Math.floor(Date.now() / 1000) + getEnvNumber(env, "MEDIA_TTL_SECONDS", 86400);
   const token = await createToken(env.TOKEN_SIGNING_SECRET, key, expiresAtSeconds);
   const urls = buildTokenUrls(request, key, token);
-  return Response.redirect(urls.viewUrl, 302);
+  const redirectHeaders = new Headers();
+  redirectHeaders.set("Location", urls.viewUrl);
+  redirectHeaders.set("Cache-Control", "no-store, must-revalidate");
+  return new Response(null, { status: 302, headers: redirectHeaders });
 }
 
 async function handleFilesList(request, env, url) {
