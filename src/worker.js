@@ -1,6 +1,6 @@
 const COOKIE_NAME = "kkinto_session";
 const PART_SIZE_BYTES = 8 * 1024 * 1024;
-const SHORT_CODE_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const SHORT_CODE_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz";
 const SHORT_CODE_LENGTH = 6;
 
 function jsonResponse(data, init = {}) {
