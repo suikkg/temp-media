@@ -917,6 +917,13 @@ function adminPage() {
       sharePageBtn.dataset.url = item.sharePageUrl || '';
       sharePageBtn.disabled = !item.sharePageUrl;
 
+      const copyDirectDlBtn = document.createElement('button');
+      copyDirectDlBtn.textContent = '直下';
+      copyDirectDlBtn.className = 'btn btn-outline btn-xs';
+      copyDirectDlBtn.dataset.action = 'copyDirect';
+      copyDirectDlBtn.dataset.url = item.directDlUrl || '';
+      copyDirectDlBtn.disabled = !item.directDlUrl;
+
       const copyDirectBtn = document.createElement('button');
       copyDirectBtn.textContent = '复制直链';
       copyDirectBtn.className = 'btn btn-outline btn-xs';
@@ -954,6 +961,7 @@ function adminPage() {
       actionsTd.appendChild(viewBtn);
       actionsTd.appendChild(downloadBtn);
       actionsTd.appendChild(copyShareBtn);
+      actionsTd.appendChild(copyDirectDlBtn);
       actionsTd.appendChild(copyDirectBtn);
       actionsTd.appendChild(sharePageBtn);
       actionsTd.appendChild(extend1);
@@ -1209,6 +1217,7 @@ function adminPage() {
           addLinkItem(file.name + ' - 预览链接', result.viewUrl);
           addLinkItem(file.name + ' - 下载链接', result.downloadUrl || result.mediaUrl);
           addLinkItem(file.name + ' - 短链接', result.shortUrl);
+          addLinkItem(file.name + ' - 直下', result.directDlUrl);
           addLinkItem(file.name + ' - 分享页', result.sharePageUrl);
         }
         await refreshStatus();
@@ -1439,9 +1448,10 @@ function viewPage({ mediaUrl, downloadUrl, name, contentType, isPlaylist, isImag
 </html>`;
 }
 
-function sharePage({ name, size, uploadedAt, expiresAt, remaining, shareUrl, viewUrl, downloadUrl }) {
+function sharePage({ name, size, uploadedAt, expiresAt, remaining, shareUrl, directDlUrl, viewUrl, downloadUrl }) {
   const safeName = escapeHtml(name);
   const safeShareUrl = escapeHtml(shareUrl || "");
+  const safeDirectDlUrl = escapeHtml(directDlUrl || "");
   const safeViewUrl = escapeHtml(viewUrl || "");
   const safeDownloadUrl = escapeHtml(downloadUrl || "");
   const uploadedText = uploadedAt ? new Date(uploadedAt).toLocaleString("zh-CN") : "未知";
@@ -1488,6 +1498,15 @@ function sharePage({ name, size, uploadedAt, expiresAt, remaining, shareUrl, vie
     <div class="row">
       <input id="shortUrl" value="${safeShareUrl}" readonly />
       <button data-copy="shortUrl">复制</button>
+    </div>
+  </div>` : ""}
+
+  ${safeDirectDlUrl ? `
+  <div class="link-group">
+    <div>直下链接（无需token，有IP限速100次/时）</div>
+    <div class="row">
+      <input id="directDlUrl" value="${safeDirectDlUrl}" readonly />
+      <button data-copy="directDlUrl">复制</button>
     </div>
   </div>` : ""}
 
@@ -1859,6 +1878,7 @@ async function handleUploadComplete(request, env) {
   }
   const shareUrl = shortCode ? `${baseUrl}/s/${shortCode}` : null;
   const sharePageUrl = shortCode ? `${baseUrl}/share/${shortCode}` : null;
+  const directDlUrl = shortCode ? `${baseUrl}/d/${shortCode}` : null;
 
   return jsonResponse({
     key: record.key,
@@ -1868,6 +1888,7 @@ async function handleUploadComplete(request, env) {
     downloadUrl,
     shortUrl: shareUrl,
     sharePageUrl,
+    directDlUrl,
     shortCode,
     expiresAt: record.expiresAt,
   });
@@ -1978,6 +1999,44 @@ async function handleView(request, env, url) {
   return htmlResponse(viewPage({ mediaUrl, downloadUrl, name, contentType, isPlaylist, isImage, isAudio, isMedia, size }));
 }
 
+async function handleDirectDownload(request, env, url) {
+  const code = decodeURIComponent(url.pathname.replace("/d/", ""));
+  if (!code) return textResponse("Not found", { status: 404 });
+  const key = await resolveShortCode(env, code);
+  if (!key) return textResponse("Not found", { status: 404 });
+
+  const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+  const rateKey = `dl:${ip}`;
+  const countRaw = await env.APP_KV.get(rateKey);
+  const count = Number(countRaw) || 0;
+  if (count >= 100) {
+    return textResponse("Rate limit exceeded, try again later", { status: 429 });
+  }
+  await env.APP_KV.put(rateKey, String(count + 1), { expirationTtl: 3600 });
+
+  const head = await env.MEDIA_BUCKET.head(key);
+  if (!head) return textResponse("Not found", { status: 404 });
+  const meta = await getMetaForKey(env, key, head);
+  const expiresAt = extractExpiresAt(meta, head);
+  if (expiresAt && Date.parse(expiresAt) <= Date.now()) {
+    await deleteObjectAndMeta(env, key, head, meta);
+    return textResponse("Expired", { status: 410 });
+  }
+
+  const object = await env.MEDIA_BUCKET.get(key);
+  if (!object) return textResponse("Not found", { status: 404 });
+  const filename = meta?.originalName || key.split("/").pop() || "file";
+  const headers = new Headers();
+  object.writeHttpMetadata(headers);
+  const extType = guessContentType(key);
+  if (extType !== "application/octet-stream") {
+    headers.set("Content-Type", extType);
+  }
+  headers.set("Content-Disposition", `attachment; filename="${sanitizeHeaderValue(filename)}"`);
+  headers.set("Cache-Control", "public, max-age=3600");
+  return new Response(object.body, { status: 200, headers });
+}
+
 async function handleSharePage(request, env, url) {
   const code = decodeURIComponent(url.pathname.replace("/share/", ""));
   if (!code) return textResponse("Not found", { status: 404 });
@@ -2011,6 +2070,7 @@ async function handleSharePage(request, env, url) {
         Number.isFinite(expiresAtMs) ? Math.floor((expiresAtMs - Date.now()) / 1000) : null
       ),
       shareUrl: `${baseUrl}/s/${code}`,
+      directDlUrl: `${baseUrl}/d/${code}`,
       viewUrl: urls.viewUrl,
       downloadUrl: urls.downloadUrl,
     })
@@ -2110,6 +2170,7 @@ async function handleFilesList(request, env, url) {
       shortCode,
       shortUrl: shortCode ? `${baseUrl}/s/${shortCode}` : null,
       sharePageUrl: shortCode ? `${baseUrl}/share/${shortCode}` : null,
+      directDlUrl: shortCode ? `${baseUrl}/d/${shortCode}` : null,
       expired,
     });
   }
@@ -2341,6 +2402,10 @@ export default {
 
     if (url.pathname.startsWith("/s/")) {
       return handleShortPreview(request, env, url);
+    }
+
+    if (url.pathname.startsWith("/d/")) {
+      return handleDirectDownload(request, env, url);
     }
 
     if (url.pathname.startsWith("/media/")) {
